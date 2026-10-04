@@ -56,5 +56,8 @@ data/backups/
 cloudflared.exe
 *.exe
 
+# scratch & temporary scripts
+scratch/
+
 
 
