@@ -1,0 +1,150 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 850 1150" width="100%" height="100%" style="background-color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+  <style>
+    .title { font-weight: 800; fill: #0f172a; font-size: 20px; }
+    .subtitle { font-weight: 500; fill: #64748b; font-size: 11px; letter-spacing: 0.5px; }
+    .card-title { font-size: 9px; font-weight: 700; fill: #64748b; letter-spacing: 0.5px; }
+    .card-val { font-size: 24px; font-weight: 800; fill: #0f172a; }
+    .card-sub { font-size: 11px; font-weight: 600; fill: #dc2626; }
+    .border-box { fill: #ffffff; stroke: #e2e8f0; stroke-width: 1.2; rx: 6px; }
+    .th { font-size: 10px; font-weight: 700; fill: #ffffff; }
+    .td { font-size: 10px; fill: #1e293b; }
+    .td-num { font-size: 10px; font-weight: 600; fill: #1e293b; text-anchor: end; }
+    .td-void { font-size: 10px; font-weight: 700; fill: #dc2626; text-anchor: end; }
+  </style>
+
+  <!-- Container Outline -->
+  <rect x="25" y="25" width="800" height="1100" fill="#ffffff" stroke="#cbd5e1" stroke-width="1"/>
+
+  <!-- Header -->
+  <text x="50" y="70" class="title">ORIENTAL CUSTOMER STATEMENT</text>
+  <text x="50" y="86" class="subtitle">PENCATATAN POINT &amp; KUPON UNDIAN MEMBER</text>
+
+  <!-- Periode & Badges -->
+  <rect x="670" y="48" width="130" height="24" rx="4" fill="#0f172a"/>
+  <text x="735" y="64" fill="#ffffff" font-size="10px" font-weight="800" text-anchor="middle">PERIODE</text>
+  <text x="800" y="90" fill="#0f172a" font-size="14px" font-weight="900" text-anchor="end">SEPTEMBER 2026</text>
+  <rect x="635" y="100" width="45" height="18" rx="3" fill="#f1f5f9"/>
+  <text x="657" y="113" fill="#475569" font-size="9px" font-weight="700" text-anchor="middle">DRAFT</text>
+  <rect x="685" y="100" width="115" height="18" rx="3" fill="#fef3c7"/>
+  <text x="742" y="113" fill="#b45309" font-size="8.5px" font-weight="800" text-anchor="middle">STATUS EVALUASI KHUSUS</text>
+
+  <line x1="50" y1="130" x2="800" y2="130" stroke="#0f172a" stroke-width="1.5"/>
+
+  <!-- Customer Box (Kiri) -->
+  <rect x="50" y="145" width="280" height="160" class="border-box"/>
+  <text x="65" y="168" font-size="9px" font-weight="700" fill="#64748b">KEPADA YTH,</text>
+  <text x="65" y="188" font-size="14px" font-weight="800" fill="#0f172a">ANTARA COMPANY</text>
+  <text x="65" y="208" font-size="10px" fill="#475569">Kec. TANETE RIATTANG</text>
+  <text x="65" y="222" font-size="10px" fill="#475569">WATAMPONE</text>
+  <text x="65" y="236" font-size="10px" fill="#475569">SULAWESI SELATAN</text>
+  <line x1="65" y1="260" x2="315" y2="260" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="65" y="285" font-size="9.5px" fill="#64748b">Oriental One Identity:</text>
+  <text x="315" y="285" font-size="10.5px" font-weight="800" fill="#0f172a" text-anchor="end">102-261004-03</text>
+
+  <!-- Metric 1: Total Poin Bulan Berjalan -->
+  <rect x="345" y="145" width="220" height="75" class="border-box"/>
+  <text x="360" y="163" class="card-title">TOTAL POINT BULAN BERJALAN</text>
+  <text x="360" y="193" class="card-val" fill="#dc2626">0 <tspan font-size="12px" font-weight="500" fill="#64748b">Oriental Point</tspan></text>
+  <text x="360" y="210" class="card-sub">(Potensi: 194 − Penalti: 194)</text>
+
+  <!-- Metric 2: Total Poin Dimiliki -->
+  <rect x="580" y="145" width="220" height="75" class="border-box"/>
+  <text x="595" y="163" class="card-title">TOTAL POINT YANG DIMILIKI</text>
+  <rect x="725" y="152" width="65" height="15" rx="3" fill="#fee2e2"/>
+  <text x="757" y="163" font-size="8px" font-weight="700" fill="#dc2626" text-anchor="middle">DIBEKUKAN</text>
+  <text x="595" y="193" class="card-val">32 <tspan font-size="12px" font-weight="500" fill="#64748b">Oriental Point</tspan></text>
+  <text x="595" y="210" font-size="9.5px" fill="#94a3b8">Saldo aktif terverifikasi</text>
+
+  <!-- Metric 3: Total Kupon Bulan Berjalan -->
+  <rect x="345" y="230" width="220" height="75" class="border-box"/>
+  <text x="360" y="248" class="card-title">TOTAL KUPON BULAN BERJALAN</text>
+  <text x="360" y="278" class="card-val" fill="#dc2626">0 <tspan font-size="12px" font-weight="500" fill="#64748b">lembar Kupon</tspan></text>
+  <text x="360" y="295" class="card-sub">(Potensi: 68 − Penalti: 68)</text>
+
+  <!-- Metric 4: Total Kupon Dimiliki -->
+  <rect x="580" y="230" width="220" height="75" class="border-box"/>
+  <text x="595" y="248" class="card-title">TOTAL KUPON YANG DIMILIKI</text>
+  <rect x="725" y="237" width="65" height="15" rx="3" fill="#fee2e2"/>
+  <text x="757" y="248" font-size="8px" font-weight="700" fill="#dc2626" text-anchor="middle">DIBEKUKAN</text>
+  <text x="595" y="278" class="card-val">41 <tspan font-size="12px" font-weight="500" fill="#64748b">lembar Kupon</tspan></text>
+  <text x="595" y="295" font-size="9.5px" fill="#94a3b8">Kupon aktif s.d. 01/10/2026</text>
+
+  <!-- Callout Banner Peringatan Resmi -->
+  <rect x="50" y="320" width="750" height="52" rx="5" fill="#fef2f2" stroke="#fca5a5" stroke-width="1"/>
+  <text x="70" y="340" font-size="10.5px" font-weight="800" fill="#b91c1c">⚠️ PERINGATAN RESMI &amp; PEMBEKUAN HAK (STATUS SANKSI):</text>
+  <text x="70" y="358" font-size="9.5px" fill="#7f1d1d">Akun dalam status evaluasi khusus akibat pelanggaran kerja sama B2B. Seluruh hak perolehan Poin dan Kupon periode berjalan</text>
+  <text x="70" y="369" font-size="9.5px" font-weight="700" fill="#b91c1c">DIHAPUSKAN (VOID) dan tidak dapat dicairkan atau diikutsertakan dalam pengundian doorprize.</text>
+
+  <!-- Table Header -->
+  <rect x="50" y="385" width="750" height="24" fill="#0f172a"/>
+  <text x="65" y="401" class="th">REKAPAN BULANAN SEPTEMBER 2026</text>
+
+  <rect x="50" y="409" width="750" height="22" fill="#1e293b"/>
+  <text x="65" y="424" class="th">NO</text>
+  <text x="95" y="424" class="th">ID OUTLET</text>
+  <text x="240" y="424" class="th">NAMA OUTLET</text>
+  <text x="560" y="424" class="th" text-anchor="end">TOTAL TRANSAKSI</text>
+  <text x="670" y="424" class="th" text-anchor="end">POINT</text>
+  <text x="785" y="424" class="th" text-anchor="end">KUPON</text>
+
+  <!-- Row 1 -->
+  <rect x="50" y="431" width="750" height="26" fill="#ffffff" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="65" y="448" class="td">1</text>
+  <text x="95" y="448" class="td font-mono">102-261004-03</text>
+  <text x="240" y="448" class="td">ANTARA COMPANY - RETAIL</text>
+  <text x="560" y="448" class="td-num">Rp 0</text>
+  <text x="670" y="448" class="td-num">0 Point</text>
+  <text x="785" y="448" class="td-num">0 Lembar</text>
+
+  <!-- Row 2 -->
+  <rect x="50" y="457" width="750" height="26" fill="#f8fafc" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="65" y="474" class="td">2</text>
+  <text x="95" y="474" class="td font-mono">102-261004-03-01-100</text>
+  <text x="240" y="474" class="td">ANTARA BAKERY - UKM KULINER</text>
+  <text x="560" y="474" class="td-num">Rp 0</text>
+  <text x="670" y="474" class="td-num">0 Point</text>
+  <text x="785" y="474" class="td-num">0 Lembar</text>
+
+  <!-- Row 3 -->
+  <rect x="50" y="483" width="750" height="26" fill="#ffffff" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="65" y="500" class="td">3</text>
+  <text x="95" y="500" class="td font-mono">102-261004-03-02-100</text>
+  <text x="240" y="500" class="td font-bold">ANTARA COFFEE - UKM KULINER</text>
+  <text x="560" y="500" class="td-num">Rp 9.448.000</text>
+  <text x="670" y="500" class="td-void">0 [VOID]</text>
+  <text x="785" y="500" class="td-void">0 [VOID]</text>
+
+  <!-- Row 4 -->
+  <rect x="50" y="509" width="750" height="26" fill="#f8fafc" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="65" y="526" class="td">4</text>
+  <text x="95" y="526" class="td font-mono">102-261004-03-03-100</text>
+  <text x="240" y="526" class="td">ANTARA FOOD - UKM KULINER</text>
+  <text x="560" y="526" class="td-num">Rp 132.000</text>
+  <text x="670" y="526" class="td-void">0 [VOID]</text>
+  <text x="785" y="526" class="td-num">0 Lembar</text>
+
+  <!-- Row 5 -->
+  <rect x="50" y="535" width="750" height="26" fill="#ffffff" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="65" y="552" class="td">5</text>
+  <text x="95" y="552" class="td font-mono">102-261004-03-01-900</text>
+  <text x="240" y="552" class="td">ANTARA COMPANY - GROSIR</text>
+  <text x="560" y="552" class="td-num">Rp 975.000</text>
+  <text x="670" y="552" class="td-void">0 [VOID]</text>
+  <text x="785" y="552" class="td-void">0 [VOID]</text>
+
+  <!-- Total Row -->
+  <rect x="50" y="561" width="750" height="30" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1"/>
+  <text x="440" y="581" font-size="11px" font-weight="800" fill="#0f172a">TOTAL</text>
+  <text x="560" y="581" font-size="11px" font-weight="800" fill="#0f172a" text-anchor="end">Rp 10.555.000</text>
+  <text x="670" y="581" font-size="11px" font-weight="800" fill="#dc2626" text-anchor="end">0 Point</text>
+  <text x="785" y="581" font-size="11px" font-weight="800" fill="#dc2626" text-anchor="end">0 Lembar</text>
+
+  <!-- Signature Area -->
+  <text x="720" y="650" font-size="10px" fill="#475569" text-anchor="middle">Diterima oleh,</text>
+  <line x1="640" y1="710" x2="800" y2="710" stroke="#0f172a" stroke-width="1.2"/>
+  <text x="720" y="725" font-size="11px" font-weight="800" fill="#0f172a" text-anchor="middle">ANTARA COMPANY</text>
+
+  <!-- Footer Audit -->
+  <text x="50" y="1060" font-size="9px" fill="#94a3b8">*Perhitungan telah dievaluasi by Sistem Audit Oriental</text>
+  <text x="50" y="1075" font-size="9px" font-weight="700" fill="#dc2626">*Pemberian Poin &amp; Kupon dinonaktifkan permanen untuk periode berjalan (Status Evaluasi Khusus)</text>
+</svg>

@@ -1,0 +1,229 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 850 1200" width="100%" height="100%" style="background-color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+  <style>
+    .title { font-weight: 800; fill: #0f172a; font-size: 19px; }
+    .subtitle { font-weight: 600; fill: #475569; font-size: 10.5px; letter-spacing: 0.5px; }
+    .card-title { font-size: 8.5px; font-weight: 700; fill: #64748b; letter-spacing: 0.5px; }
+    .card-val { font-size: 22px; font-weight: 800; fill: #0f172a; }
+    .card-sub { font-size: 10px; font-weight: 600; fill: #dc2626; }
+    .border-box { fill: #ffffff; stroke: #e2e8f0; stroke-width: 1.2; rx: 5px; }
+    .th { font-size: 9.5px; font-weight: 700; fill: #ffffff; }
+    .td { font-size: 9.5px; fill: #1e293b; }
+    .td-num { font-size: 9.5px; font-weight: 600; fill: #1e293b; text-anchor: end; }
+    .td-void { font-size: 9.5px; font-weight: 700; fill: #dc2626; text-anchor: end; }
+    .td-center { font-size: 9.5px; fill: #64748b; text-anchor: middle; }
+  </style>
+
+  <!-- Container Outline Canvas -->
+  <rect x="25" y="20" width="800" height="1160" fill="#ffffff" stroke="#cbd5e1" stroke-width="1"/>
+
+  <!-- ================= HEADER SECTION ================= -->
+  <text x="50" y="58" class="title">ORIENTAL CUSTOMER STATEMENT</text>
+  <text x="50" y="74" class="subtitle">ARSIP &amp; RIWAYAT TRANSAKSI 13 BULAN (INTERNAL AUDIT)</text>
+
+  <!-- Periode & Status Badges -->
+  <rect x="670" y="38" width="130" height="22" rx="4" fill="#0f172a"/>
+  <text x="735" y="53" fill="#ffffff" font-size="9.5px" font-weight="800" text-anchor="middle">PERIODE</text>
+  <text x="800" y="78" fill="#0f172a" font-size="13px" font-weight="900" text-anchor="end">SEPTEMBER 2026</text>
+  <rect x="670" y="86" width="130" height="18" rx="3" fill="#fef3c7"/>
+  <text x="735" y="98" fill="#b45309" font-size="8.5px" font-weight="800" text-anchor="middle">STATUS EVALUASI KHUSUS</text>
+
+  <line x1="50" y1="112" x2="800" y2="112" stroke="#0f172a" stroke-width="1.5"/>
+
+  <!-- ================= CUSTOMER INFO & KPI CARDS ================= -->
+  <!-- Box Identitas Customer (Kiri) -->
+  <rect x="50" y="122" width="280" height="135" class="border-box"/>
+  <text x="65" y="142" font-size="8.5px" font-weight="700" fill="#64748b">KEPADA YTH,</text>
+  <text x="65" y="159" font-size="13px" font-weight="800" fill="#0f172a">ANTARA COMPANY</text>
+  <text x="65" y="176" font-size="9.5px" fill="#475569">TANETE RIATTANG, WATAMPONE</text>
+  <text x="65" y="190" font-size="9.5px" fill="#475569">SULAWESI SELATAN</text>
+  <line x1="65" y1="210" x2="315" y2="210" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="65" y="232" font-size="9px" fill="#64748b">Oriental One Identity:</text>
+  <text x="315" y="232" font-size="10px" font-weight="800" fill="#0f172a" text-anchor="end">102-261004-03</text>
+
+  <!-- Metric 1: Total Poin Bulan Berjalan -->
+  <rect x="345" y="122" width="220" height="63" class="border-box"/>
+  <text x="360" y="137" class="card-title">TOTAL POINT BULAN BERJALAN</text>
+  <text x="360" y="162" class="card-val" fill="#dc2626">0 <tspan font-size="11px" font-weight="500" fill="#64748b">Oriental Point</tspan></text>
+  <text x="360" y="176" class="card-sub">(Potensi: 194 − Penalti: 194)</text>
+
+  <!-- Metric 2: Total Poin Dimiliki (Akumulasi Aktif) -->
+  <rect x="580" y="122" width="220" height="63" class="border-box"/>
+  <text x="595" y="137" class="card-title">TOTAL POINT YANG DIMILIKI</text>
+  <rect x="725" y="128" width="65" height="14" rx="3" fill="#fee2e2"/>
+  <text x="757" y="138" font-size="7.5px" font-weight="700" fill="#dc2626" text-anchor="middle">DIBEKUKAN</text>
+  <text x="595" y="162" class="card-val">32 <tspan font-size="11px" font-weight="500" fill="#64748b">Oriental Point</tspan></text>
+  <text x="595" y="176" font-size="8.5px" fill="#94a3b8">Saldo aktif terverifikasi (s.d. 01/10/2026)</text>
+
+  <!-- Metric 3: Total Kupon Bulan Berjalan -->
+  <rect x="345" y="194" width="220" height="63" class="border-box"/>
+  <text x="360" y="209" class="card-title">TOTAL KUPON BULAN BERJALAN</text>
+  <text x="360" y="234" class="card-val" fill="#dc2626">0 <tspan font-size="11px" font-weight="500" fill="#64748b">lembar Kupon</tspan></text>
+  <text x="360" y="248" class="card-sub">(Potensi: 68 − Penalti: 68)</text>
+
+  <!-- Metric 4: Total Kupon Dimiliki -->
+  <rect x="580" y="194" width="220" height="63" class="border-box"/>
+  <text x="595" y="209" class="card-title">TOTAL KUPON YANG DIMILIKI</text>
+  <rect x="725" y="200" width="65" height="14" rx="3" fill="#fee2e2"/>
+  <text x="757" y="210" font-size="7.5px" font-weight="700" fill="#dc2626" text-anchor="middle">DIBEKUKAN</text>
+  <text x="595" y="234" class="card-val">41 <tspan font-size="11px" font-weight="500" fill="#64748b">lembar Kupon</tspan></text>
+  <text x="595" y="248" font-size="8.5px" fill="#94a3b8">Kupon aktif s.d. 01/10/2026</text>
+
+  <!-- ================= TABEL 1: RIWAYAT 13 BULAN ================= -->
+  <rect x="50" y="268" width="750" height="20" fill="#0f172a"/>
+  <text x="65" y="282" class="th">TRANSAKSI PEROLEHAN POINT PERIODE 2026-2027 (INTERNAL VIEW)</text>
+
+  <rect x="50" y="288" width="750" height="18" fill="#1e293b"/>
+  <text x="65" y="300" class="th">No</text>
+  <text x="95" y="300" class="th">Bulan</text>
+  <text x="530" y="300" class="th" text-anchor="end">Total Transaksi</text>
+  <text x="625" y="300" class="th" text-anchor="end">Point</text>
+  <text x="710" y="300" class="th" text-anchor="middle">Bonus Point</text>
+  <text x="785" y="300" class="th" text-anchor="end">Kupon</text>
+
+  <!-- Baris 1: September 2026 (Bulan Sanksi) -->
+  <rect x="50" y="306" width="750" height="19" fill="#fef2f2" stroke="#fecaca" stroke-width="0.8"/>
+  <text x="65" y="319" class="td font-bold" fill="#b91c1c">1</text>
+  <text x="95" y="319" class="td font-bold" fill="#b91c1c">SEPTEMBER 2026</text>
+  <rect x="205" y="308" width="55" height="14" rx="2" fill="#fee2e2"/>
+  <text x="232" y="318" font-size="7.5px" font-weight="800" fill="#b91c1c" text-anchor="middle">SANKSI VOID</text>
+  <text x="530" y="319" class="td-num font-bold">Rp 10.555.000</text>
+  <text x="625" y="319" class="td-void">0 [VOID 194]</text>
+  <text x="710" y="319" class="td-center">Point -</text>
+  <text x="785" y="319" class="td-void">0 [VOID 68]</text>
+
+  <!-- Baris 2: Oktober 2026 -->
+  <rect x="50" y="325" width="750" height="18" fill="#ffffff" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="65" y="338" class="td">2</text>
+  <text x="95" y="338" class="td">OKTOBER 2026</text>
+  <text x="530" y="338" class="td-num">Rp 6.285.000</text>
+  <text x="625" y="338" class="td-num">32 Point</text>
+  <text x="710" y="338" class="td-center">Point -</text>
+  <text x="785" y="338" class="td-num">41 Lembar</text>
+
+  <!-- Baris 3 - 13: Bulan Mendatang -->
+  <!-- 3. Nov -->
+  <rect x="50" y="343" width="750" height="17" fill="#f8fafc" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="65" y="355" class="td">3</text><text x="95" y="355" class="td">NOVEMBER 2026</text><text x="530" y="355" class="td-num">Rp. -</text><text x="625" y="355" class="td-center">Point -</text><text x="710" y="355" class="td-center">Point -</text><text x="785" y="355" class="td-center">Lembar -</text>
+  <!-- 4. Des -->
+  <rect x="50" y="360" width="750" height="17" fill="#ffffff" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="65" y="372" class="td">4</text><text x="95" y="372" class="td">DESEMBER 2026</text><text x="530" y="372" class="td-num">Rp. -</text><text x="625" y="372" class="td-center">Point -</text><text x="710" y="372" class="td-center">Point -</text><text x="785" y="372" class="td-center">Lembar -</text>
+  <!-- 5. Jan -->
+  <rect x="50" y="377" width="750" height="17" fill="#f8fafc" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="65" y="389" class="td">5</text><text x="95" y="389" class="td">JANUARI 2027</text><text x="530" y="389" class="td-num">Rp. -</text><text x="625" y="389" class="td-center">Point -</text><text x="710" y="389" class="td-center">Point -</text><text x="785" y="389" class="td-center">Lembar -</text>
+  <!-- 6. Feb -->
+  <rect x="50" y="394" width="750" height="17" fill="#ffffff" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="65" y="406" class="td">6</text><text x="95" y="406" class="td">FEBRUARI 2027</text><text x="530" y="406" class="td-num">Rp. -</text><text x="625" y="406" class="td-center">Point -</text><text x="710" y="406" class="td-center">Point -</text><text x="785" y="406" class="td-center">Lembar -</text>
+  <!-- 7. Mar -->
+  <rect x="50" y="411" width="750" height="17" fill="#f8fafc" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="65" y="423" class="td">7</text><text x="95" y="423" class="td">MARET 2027</text><text x="530" y="423" class="td-num">Rp. -</text><text x="625" y="423" class="td-center">Point -</text><text x="710" y="423" class="td-center">Point -</text><text x="785" y="423" class="td-center">Lembar -</text>
+  <!-- 8. Apr -->
+  <rect x="50" y="428" width="750" height="17" fill="#ffffff" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="65" y="440" class="td">8</text><text x="95" y="440" class="td">APRIL 2027</text><text x="530" y="440" class="td-num">Rp. -</text><text x="625" y="440" class="td-center">Point -</text><text x="710" y="440" class="td-center">Point -</text><text x="785" y="440" class="td-center">Lembar -</text>
+  <!-- 9. Mei -->
+  <rect x="50" y="445" width="750" height="17" fill="#f8fafc" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="65" y="457" class="td">9</text><text x="95" y="457" class="td">MEI 2027</text><text x="530" y="457" class="td-num">Rp. -</text><text x="625" y="457" class="td-center">Point -</text><text x="710" y="457" class="td-center">Point -</text><text x="785" y="457" class="td-center">Lembar -</text>
+  <!-- 10. Jun -->
+  <rect x="50" y="462" width="750" height="17" fill="#ffffff" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="65" y="474" class="td">10</text><text x="95" y="474" class="td">JUNI 2027</text><text x="530" y="474" class="td-num">Rp. -</text><text x="625" y="474" class="td-center">Point -</text><text x="710" y="474" class="td-center">Point -</text><text x="785" y="474" class="td-center">Lembar -</text>
+  <!-- 11. Jul -->
+  <rect x="50" y="479" width="750" height="17" fill="#f8fafc" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="65" y="491" class="td">11</text><text x="95" y="491" class="td">JULI 2027</text><text x="530" y="491" class="td-num">Rp. -</text><text x="625" y="491" class="td-center">Point -</text><text x="710" y="491" class="td-center">Point -</text><text x="785" y="491" class="td-center">Lembar -</text>
+  <!-- 12. Ags -->
+  <rect x="50" y="496" width="750" height="17" fill="#ffffff" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="65" y="508" class="td">12</text><text x="95" y="508" class="td">AGUSTUS 2027</text><text x="530" y="508" class="td-num">Rp. -</text><text x="625" y="508" class="td-center">Point -</text><text x="710" y="508" class="td-center">Point -</text><text x="785" y="508" class="td-center">Lembar -</text>
+  <!-- 13. Sep 27 -->
+  <rect x="50" y="513" width="750" height="17" fill="#f8fafc" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="65" y="525" class="td">13</text><text x="95" y="525" class="td">SEPTEMBER 2027</text><text x="530" y="525" class="td-num">Rp. -</text><text x="625" y="525" class="td-center">Point -</text><text x="710" y="525" class="td-center">Point -</text><text x="785" y="525" class="td-center">Lembar -</text>
+
+  <!-- Total Baris 13 Bulan (Dengan Penyesuaian Saldo Bersih) -->
+  <rect x="50" y="530" width="750" height="24" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1"/>
+  <text x="360" y="546" font-size="10px" font-weight="800" fill="#0f172a">TOTAL AKUMULASI DIAKUI</text>
+  <text x="530" y="546" font-size="10px" font-weight="800" fill="#0f172a" text-anchor="end">Rp 16.840.000</text>
+  <text x="625" y="546" font-size="10px" font-weight="800" fill="#0f172a" text-anchor="end">32 Point</text>
+  <text x="710" y="546" class="td-center">Point -</text>
+  <text x="785" y="546" font-size="10px" font-weight="800" fill="#0f172a" text-anchor="end">41 Lembar</text>
+
+  <!-- ================= TABEL 2: REKAPAN OUTLET ================= -->
+  <rect x="50" y="570" width="750" height="20" fill="#0f172a"/>
+  <text x="65" y="584" class="th">REKAPAN BULANAN SEPTEMBER 2026 (RINCIAN STATUS OUTLET)</text>
+
+  <rect x="50" y="590" width="750" height="18" fill="#1e293b"/>
+  <text x="65" y="602" class="th">No</text>
+  <text x="95" y="602" class="th">ID Outlet</text>
+  <text x="240" y="602" class="th">Nama Outlet</text>
+  <text x="530" y="602" class="th" text-anchor="end">Total Transaksi</text>
+  <text x="625" y="602" class="th" text-anchor="end">Point</text>
+  <text x="785" y="602" class="th" text-anchor="end">Kupon</text>
+
+  <!-- Row 1: Retail -->
+  <rect x="50" y="608" width="750" height="20" fill="#ffffff" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="65" y="622" class="td">1</text>
+  <text x="95" y="622" class="td font-mono">102-261004-03</text>
+  <text x="240" y="622" class="td">ANTARA COMPANY - RETAIL</text>
+  <text x="530" y="622" class="td-num">Rp 0</text>
+  <text x="625" y="622" class="td-num">0 Point</text>
+  <text x="785" y="622" class="td-num">0 Lembar</text>
+
+  <!-- Row 2: Bakery -->
+  <rect x="50" y="628" width="750" height="20" fill="#f8fafc" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="65" y="642" class="td">2</text>
+  <text x="95" y="642" class="td font-mono">102-261004-03-01-100</text>
+  <text x="240" y="642" class="td">ANTARA BAKERY - UKM KULINER</text>
+  <text x="530" y="642" class="td-num">Rp 0</text>
+  <text x="625" y="642" class="td-num">0 Point</text>
+  <text x="785" y="642" class="td-num">0 Lembar</text>
+
+  <!-- Row 3: Coffee -->
+  <rect x="50" y="648" width="750" height="20" fill="#ffffff" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="65" y="662" class="td">3</text>
+  <text x="95" y="662" class="td font-mono">102-261004-03-02-100</text>
+  <text x="240" y="662" class="td font-bold">ANTARA COFFEE - UKM KULINER</text>
+  <text x="530" y="662" class="td-num">Rp 9.448.000</text>
+  <text x="625" y="662" class="td-void">0 [VOID: 188]</text>
+  <text x="785" y="662" class="td-void">0 [VOID: 62]</text>
+
+  <!-- Row 4: Food -->
+  <rect x="50" y="668" width="750" height="20" fill="#f8fafc" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="65" y="682" class="td">4</text>
+  <text x="95" y="682" class="td font-mono">102-261004-03-03-100</text>
+  <text x="240" y="682" class="td">ANTARA FOOD - UKM KULINER</text>
+  <text x="530" y="682" class="td-num">Rp 132.000</text>
+  <text x="625" y="662" class="td-void">0 [VOID: 2]</text>
+  <text x="785" y="682" class="td-num">0 Lembar</text>
+
+  <!-- Row 5: Grosir -->
+  <rect x="50" y="688" width="750" height="20" fill="#ffffff" stroke="#f1f5f9" stroke-width="1"/>
+  <text x="65" y="702" class="td">5</text>
+  <text x="95" y="702" class="td font-mono">102-261004-03-01-900</text>
+  <text x="240" y="702" class="td">ANTARA COMPANY - GROSIR</text>
+  <text x="530" y="702" class="td-num">Rp 975.000</text>
+  <text x="625" y="702" class="td-void">0 [VOID: 4]</text>
+  <text x="785" y="702" class="td-void">0 [VOID: 6]</text>
+
+  <!-- Total Rekapan Outlet -->
+  <rect x="50" y="708" width="750" height="24" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1"/>
+  <text x="440" y="724" font-size="10px" font-weight="800" fill="#0f172a">TOTAL</text>
+  <text x="530" y="724" font-size="10px" font-weight="800" fill="#0f172a" text-anchor="end">Rp 10.555.000</text>
+  <text x="625" y="724" font-size="10px" font-weight="800" fill="#dc2626" text-anchor="end">0 Point</text>
+  <text x="785" y="724" font-size="10px" font-weight="800" fill="#dc2626" text-anchor="end">0 Lembar</text>
+
+  <!-- ================= KLAUSUL LEGAL AUDIT ================= -->
+  <rect x="50" y="748" width="750" height="42" rx="4" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1"/>
+  <text x="65" y="764" font-size="8.5px" font-weight="700" fill="#334155">BERITA ACARA AUDIT &amp; PENGESAHAN SALDO:</text>
+  <text x="65" y="777" font-size="8px" fill="#475569">Dokumen arsip internal ini mengonfirmasi pembatalan/void 194 Poin dan 68 Kupon periode September 2026 akibat status evaluasi khusus.</text>
+  <text x="65" y="787" font-size="8px" font-weight="700" fill="#0f172a">Total saldo hak akumulasi yang diakui dan sah untuk ditindaklanjuti adalah sebesar 32 Point dan 41 Lembar Kupon.</text>
+
+  <!-- ================= DUAL SIGNATURE BOX ================= -->
+  <!-- Kiri: Management -->
+  <text x="190" y="830" font-size="9.5px" fill="#475569" text-anchor="middle">Disetujui oleh,</text>
+  <line x1="90" y1="895" x2="290" y2="895" stroke="#0f172a" stroke-width="1.2"/>
+  <text x="190" y="910" font-size="10.5px" font-weight="800" fill="#0f172a" text-anchor="middle">MANAGEMENT</text>
+
+  <!-- Kanan: Antara Company -->
+  <text x="660" y="830" font-size="9.5px" fill="#475569" text-anchor="middle">Diterima oleh,</text>
+  <line x1="560" y1="895" x2="760" y2="895" stroke="#0f172a" stroke-width="1.2"/>
+  <text x="660" y="910" font-size="10.5px" font-weight="800" fill="#0f172a" text-anchor="middle">ANTARA COMPANY</text>
+
+  <!-- ================= FOOTER NOTE ================= -->
+  <text x="50" y="1155" font-size="8.5px" fill="#94a3b8">*Halaman 2 : untuk Pencatatan Internal Audit &amp; Arsip Akuntansi Oriental</text>
+</svg>

@@ -30,6 +30,11 @@ export interface OutletSummary {
   total_transaksi: number;
   poin: number;
   kupon: number;
+  poin_seharusnya?: number;
+  kupon_seharusnya?: number;
+  is_devalued?: boolean;
+  devaluasi_poin?: number;
+  devaluasi_kupon?: number;
 }
 
 export interface StatementData {
@@ -58,8 +63,18 @@ export interface StatementData {
   // Sanksi / Penangguhan Member (Gaya A)
   is_suspended?: boolean;
   suspend_type?: 'temporary' | 'permanent' | null;
+  suspend_dari?: string | null;
+  suspend_sampai?: string | null;
   suspend_reason?: string | null;
   suspend_note?: string | null;
+  // Devaluasi metrics untuk Visual Statement
+  has_devaluasi?: boolean;
+  devaluasi_bulan_poin?: number;
+  devaluasi_bulan_kupon?: number;
+  sebelumnya_kumulatif_poin?: number;
+  sebelumnya_kumulatif_kupon?: number;
+  total_devaluasi_kumulatif_poin?: number;
+  total_devaluasi_kumulatif_kupon?: number;
 }
 
 export interface MonthlyHistory {
@@ -70,6 +85,9 @@ export interface MonthlyHistory {
   poin: number;
   bonus_poin: number;
   kupon: number;
+  is_suspended?: boolean;
+  devaluasi_poin?: number;
+  devaluasi_kupon?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -211,97 +229,12 @@ export function buildStatementData(identityId: string, bulan: string): Statement
   const lastDay = new Date(Number(yyyy), Number(mm), 0).getDate();
   const bulanEnd = `${bulan}-${String(lastDay).padStart(2, '0')}`;
 
-  // Outlet-outlet aktif
-  const outletsDb = db
-    .prepare(`SELECT o.id, o.nama_outlet, o.tipe FROM outlets o WHERE o.identity_id = ? AND o.aktif = 1`)
-    .all(identityId) as { id: string; nama_outlet: string; tipe: OutletTipe }[];
-
-  // Ringkasan per outlet untuk BULAN INI
-  const outletSummaries: OutletSummary[] = outletsDb.map((o) => {
-    const agg = db
-      .prepare(`
-        SELECT 
-          COALESCE(SUM(jumlah), 0) AS total_transaksi,
-          COALESCE(SUM(poin), 0)   AS poin,
-          COALESCE(SUM(kupon), 0)  AS kupon
-        FROM invoices
-        WHERE outlet_id = ?
-          AND tanggal >= ? AND tanggal <= ?
-          AND is_excluded = 0
-      `)
-      .get(o.id, bulanStart, bulanEnd) as { total_transaksi: number; poin: number; kupon: number };
-
-    return {
-      outlet_id: o.id,
-      nama_outlet: o.nama_outlet,
-      tipe: o.tipe,
-      identity_id: identityId,
-      total_transaksi: agg.total_transaksi,
-      poin: agg.poin,
-      kupon: agg.kupon,
-    };
-  });
-
-  const bulanTotal = outletSummaries.reduce(
-    (acc, o) => ({
-      transaksi: acc.transaksi + o.total_transaksi,
-      poin: acc.poin + o.poin,
-      kupon: acc.kupon + o.kupon,
-    }),
-    { transaksi: 0, poin: 0, kupon: 0 }
-  );
-
-  // Kumulatif seluruh transaksi aktif sejak program dimulai (1 Sep 2026) s.d. hari pengecekan / transaksi terakhir
-  const kumulatif = db
-    .prepare(`
-      SELECT
-        COALESCE(SUM(i.poin), 0)  AS kumulatif_poin,
-        COALESCE(SUM(i.kupon), 0) AS kumulatif_kupon,
-        MAX(i.tanggal)            AS transaksi_terakhir
-      FROM invoices i
-      JOIN outlets o ON i.outlet_id = o.id
-      WHERE o.identity_id = ?
-        AND i.tanggal >= '2026-09-01'
-        AND i.is_excluded = 0
-    `)
-    .get(identityId) as { kumulatif_poin: number; kumulatif_kupon: number; transaksi_terakhir: string | null };
-
-  // Histori 13 bulan
-  const histori: MonthlyHistory[] = PERIODE_MONTHS.map((m, idx) => {
-    const mStart = `${m}-01`;
-    const [y2, m2] = m.split('-');
-    const ld = new Date(Number(y2), Number(m2), 0).getDate();
-    const mEnd = `${m}-${String(ld).padStart(2, '0')}`;
-
-    const hAgg = db
-      .prepare(`
-        SELECT
-          COALESCE(SUM(i.jumlah), 0) AS total_transaksi,
-          COALESCE(SUM(i.poin), 0)   AS poin,
-          COALESCE(SUM(i.kupon), 0)  AS kupon
-        FROM invoices i
-        JOIN outlets o ON i.outlet_id = o.id
-        WHERE o.identity_id = ?
-          AND i.tanggal >= ? AND i.tanggal <= ?
-          AND i.is_excluded = 0
-      `)
-      .get(identityId, mStart, mEnd) as { total_transaksi: number; poin: number; kupon: number };
-
-    return {
-      no: idx + 1,
-      bulan: m,
-      label: bulanLabel(m),
-      total_transaksi: hAgg.total_transaksi,
-      poin: hAgg.poin,
-      bonus_poin: 0,  // Fase berikutnya (PRD 5)
-      kupon: hAgg.kupon,
-    };
-  });
-
   // Cek status sanksi / penangguhan member untuk bulan statement ini
   let isMonthSuspended = false;
   let activeReason = identity.suspend_reason || null;
   let activeType = identity.suspend_type || null;
+  let activeDari = identity.suspend_dari || null;
+  let activeSampai = identity.suspend_sampai || null;
 
   if (identity.is_suspended === 1) {
     if (identity.suspend_type === 'permanent') {
@@ -320,21 +253,198 @@ export function buildStatementData(identityId: string, bulan: string): Statement
   // Jika tidak aktif saat ini, periksa apakah bulan ini pernah tercatat dalam riwayat sanksi
   if (!isMonthSuspended) {
     const pastPenalty = db.prepare(`
-      SELECT jenis_sanksi, alasan
+      SELECT jenis_sanksi, alasan, dari, sampai
       FROM member_penalties
       WHERE identity_id = ?
         AND dari <= ?
         AND (sampai IS NULL OR sampai >= ?)
       ORDER BY id DESC
       LIMIT 1
-    `).get(identityId, bulanEnd, bulanStart) as { jenis_sanksi: 'temporary' | 'permanent'; alasan: string } | undefined;
+    `).get(identityId, bulanEnd, bulanStart) as { jenis_sanksi: 'temporary' | 'permanent'; alasan: string; dari: string; sampai: string | null } | undefined;
 
     if (pastPenalty) {
       isMonthSuspended = true;
       activeReason = pastPenalty.alasan;
       activeType = pastPenalty.jenis_sanksi;
+      activeDari = pastPenalty.dari;
+      activeSampai = pastPenalty.sampai;
     }
   }
+
+  // Outlet-outlet aktif
+  const outletsDb = db
+    .prepare(`SELECT o.id, o.nama_outlet, o.tipe FROM outlets o WHERE o.identity_id = ? AND o.aktif = 1`)
+    .all(identityId) as { id: string; nama_outlet: string; tipe: OutletTipe }[];
+
+  const nilaiKupon = getNilaiKupon();
+
+  // Ringkasan per outlet untuk BULAN INI
+  const outletSummaries: OutletSummary[] = outletsDb.map((o) => {
+    const rate = getRate(o.tipe);
+    const invoices = db
+      .prepare(`
+        SELECT id, jumlah, poin, kupon, is_excluded, tanggal
+        FROM invoices
+        WHERE outlet_id = ?
+          AND tanggal >= ? AND tanggal <= ?
+      `)
+      .all(o.id, bulanStart, bulanEnd) as {
+        id: number;
+        jumlah: number;
+        poin: number;
+        kupon: number;
+        is_excluded: number;
+        tanggal: string;
+      }[];
+
+    let totalTransaksi = 0;
+    let actualPoin = 0;
+    let actualKupon = 0;
+    let grossPoin = 0;
+    let grossKupon = 0;
+
+    for (const inv of invoices) {
+      totalTransaksi += inv.jumlah;
+      actualPoin += inv.poin;
+      actualKupon += inv.kupon;
+      grossPoin += Math.floor(inv.jumlah / rate);
+      grossKupon += Math.floor(inv.jumlah / nilaiKupon);
+    }
+
+    const devaluasiPoinOutlet = Math.max(0, grossPoin - actualPoin);
+    const devaluasiKuponOutlet = Math.max(0, grossKupon - actualKupon);
+    const isOutletDevalued = isMonthSuspended || (totalTransaksi > 0 && (devaluasiPoinOutlet > 0 || devaluasiKuponOutlet > 0));
+
+    return {
+      outlet_id: o.id,
+      nama_outlet: o.nama_outlet,
+      tipe: o.tipe,
+      identity_id: identityId,
+      total_transaksi: totalTransaksi,
+      poin: actualPoin,
+      kupon: actualKupon,
+      poin_seharusnya: grossPoin,
+      kupon_seharusnya: grossKupon,
+      is_devalued: isOutletDevalued,
+      devaluasi_poin: devaluasiPoinOutlet,
+      devaluasi_kupon: devaluasiKuponOutlet,
+    };
+  });
+
+  const bulanTotal = outletSummaries.reduce(
+    (acc, o) => ({
+      transaksi: acc.transaksi + o.total_transaksi,
+      poin: acc.poin + o.poin,
+      kupon: acc.kupon + o.kupon,
+      devaluasi_poin: acc.devaluasi_poin + (o.devaluasi_poin || 0),
+      devaluasi_kupon: acc.devaluasi_kupon + (o.devaluasi_kupon || 0),
+    }),
+    { transaksi: 0, poin: 0, kupon: 0, devaluasi_poin: 0, devaluasi_kupon: 0 }
+  );
+
+  // Kumulatif seluruh transaksi aktif sejak program dimulai (1 Sep 2026) s.d. hari pengecekan / transaksi terakhir
+  const kumulatifRow = db
+    .prepare(`
+      SELECT
+        COALESCE(SUM(i.poin), 0)  AS kumulatif_poin,
+        COALESCE(SUM(i.kupon), 0) AS kumulatif_kupon,
+        MAX(i.tanggal)            AS transaksi_terakhir
+      FROM invoices i
+      JOIN outlets o ON i.outlet_id = o.id
+      WHERE o.identity_id = ?
+        AND i.tanggal >= '2026-09-01'
+        AND i.tanggal <= ?
+        AND i.is_excluded = 0
+    `)
+    .get(identityId, bulanEnd) as { kumulatif_poin: number; kumulatif_kupon: number; transaksi_terakhir: string | null };
+
+  // Kumulatif bruto (sebelum devaluasi/sanksi)
+  const allInvoicesCum = db
+    .prepare(`
+      SELECT i.jumlah, i.poin, i.kupon, o.tipe
+      FROM invoices i
+      JOIN outlets o ON i.outlet_id = o.id
+      WHERE o.identity_id = ?
+        AND i.tanggal >= '2026-09-01'
+        AND i.tanggal <= ?
+    `)
+    .all(identityId, bulanEnd) as { jumlah: number; poin: number; kupon: number; tipe: OutletTipe }[];
+
+  let grossCumPoin = 0;
+  let grossCumKupon = 0;
+  for (const inv of allInvoicesCum) {
+    const rate = getRate(inv.tipe);
+    grossCumPoin += Math.floor(inv.jumlah / rate);
+    grossCumKupon += Math.floor(inv.jumlah / nilaiKupon);
+  }
+
+  const voidedCouponsDb = db.prepare(`
+    SELECT COALESCE(SUM(voided_coupons_count), 0) AS total_voided_coupons,
+           COALESCE(SUM(wiped_points), 0) AS total_wiped_points
+    FROM member_penalties
+    WHERE identity_id = ?
+  `).get(identityId) as { total_voided_coupons: number; total_wiped_points: number };
+
+  const netKumulatifPoin = kumulatifRow?.kumulatif_poin ?? 0;
+  const netKumulatifKupon = kumulatifRow?.kumulatif_kupon ?? 0;
+
+  const sebelumnyaKumulatifPoin = Math.max(grossCumPoin, netKumulatifPoin + voidedCouponsDb.total_wiped_points);
+  const sebelumnyaKumulatifKupon = Math.max(grossCumKupon, netKumulatifKupon + voidedCouponsDb.total_voided_coupons);
+
+  const totalDevaluasiKumulatifPoin = Math.max(0, sebelumnyaKumulatifPoin - netKumulatifPoin);
+  const totalDevaluasiKumulatifKupon = Math.max(0, sebelumnyaKumulatifKupon - netKumulatifKupon);
+
+  const hasDevaluasi = isMonthSuspended || totalDevaluasiKumulatifPoin > 0 || totalDevaluasiKumulatifKupon > 0;
+
+  // Histori 13 bulan
+  const histori: MonthlyHistory[] = PERIODE_MONTHS.map((m, idx) => {
+    const mStart = `${m}-01`;
+    const [y2, m2] = m.split('-');
+    const ld = new Date(Number(y2), Number(m2), 0).getDate();
+    const mEnd = `${m}-${String(ld).padStart(2, '0')}`;
+
+    const monthInvoices = db
+      .prepare(`
+        SELECT i.jumlah, i.poin, i.kupon, o.tipe
+        FROM invoices i
+        JOIN outlets o ON i.outlet_id = o.id
+        WHERE o.identity_id = ?
+          AND i.tanggal >= ? AND i.tanggal <= ?
+      `)
+      .all(identityId, mStart, mEnd) as { jumlah: number; poin: number; kupon: number; tipe: OutletTipe }[];
+
+    let mTotalTransaksi = 0;
+    let mActualPoin = 0;
+    let mActualKupon = 0;
+    let mGrossPoin = 0;
+    let mGrossKupon = 0;
+
+    for (const inv of monthInvoices) {
+      mTotalTransaksi += inv.jumlah;
+      mActualPoin += inv.poin;
+      mActualKupon += inv.kupon;
+      const rate = getRate(inv.tipe);
+      mGrossPoin += Math.floor(inv.jumlah / rate);
+      mGrossKupon += Math.floor(inv.jumlah / nilaiKupon);
+    }
+
+    const mDevaluasiPoin = Math.max(0, mGrossPoin - mActualPoin);
+    const mDevaluasiKupon = Math.max(0, mGrossKupon - mActualKupon);
+    const mIsSuspended = (mDevaluasiPoin > 0 || mDevaluasiKupon > 0) && (mActualPoin === 0 && mTotalTransaksi > 0);
+
+    return {
+      no: idx + 1,
+      bulan: m,
+      label: bulanLabel(m),
+      total_transaksi: mTotalTransaksi,
+      poin: mActualPoin,
+      bonus_poin: 0,  // Fase berikutnya (PRD 5)
+      kupon: mActualKupon,
+      is_suspended: mIsSuspended,
+      devaluasi_poin: mDevaluasiPoin,
+      devaluasi_kupon: mDevaluasiKupon,
+    };
+  });
 
   const suspendNote = isMonthSuspended
     ? '*Pemberian Poin & Kupon dinonaktifkan sementara (Status Evaluasi Khusus)'
@@ -354,15 +464,24 @@ export function buildStatementData(identityId: string, bulan: string): Statement
     bulan_poin: bulanTotal.poin,
     bulan_bonus_poin: 0,
     bulan_kupon: bulanTotal.kupon,
-    kumulatif_poin: kumulatif.kumulatif_poin,
-    kumulatif_kupon: kumulatif.kumulatif_kupon,
-    transaksi_terakhir: kumulatif.transaksi_terakhir,
+    kumulatif_poin: netKumulatifPoin,
+    kumulatif_kupon: netKumulatifKupon,
+    transaksi_terakhir: kumulatifRow?.transaksi_terakhir ?? null,
     outlets: outletSummaries,
     histori,
     is_suspended: isMonthSuspended,
     suspend_type: isMonthSuspended ? activeType : null,
+    suspend_dari: activeDari,
+    suspend_sampai: activeSampai,
     suspend_reason: isMonthSuspended ? activeReason : null,
     suspend_note: suspendNote,
+    has_devaluasi: hasDevaluasi,
+    devaluasi_bulan_poin: bulanTotal.devaluasi_poin,
+    devaluasi_bulan_kupon: bulanTotal.devaluasi_kupon,
+    sebelumnya_kumulatif_poin: sebelumnyaKumulatifPoin,
+    sebelumnya_kumulatif_kupon: sebelumnyaKumulatifKupon,
+    total_devaluasi_kumulatif_poin: totalDevaluasiKumulatifPoin,
+    total_devaluasi_kumulatif_kupon: totalDevaluasiKumulatifKupon,
   };
 }
 

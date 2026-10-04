@@ -1,4 +1,4 @@
-# setup-windows-task.ps1 — Registrasi Otomatis Jadwal Backup CRM Oriental ke Windows Task Scheduler
+# setup-windows-task.ps1 - Registrasi Otomatis Jadwal Backup CRM Oriental ke Windows Task Scheduler
 # Jalankan PowerShell sebagai Administrator:
 # powershell -ExecutionPolicy Bypass -File .\scripts\setup-windows-task.ps1
 
@@ -28,10 +28,12 @@ $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoi
 try {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
     Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Settings $Settings -Description "Cadangan harian database SQLite Oriental CRM pukul 23:00 dengan retensi 30 hari" | Out-Null
-    Write-Host "`n✓ BERHASIL! Tugas '$TaskName' berhasil didaftarkan di Windows Task Scheduler." -ForegroundColor Green
+    Write-Host ""
+    Write-Host "[OK] Tugas $TaskName berhasil didaftarkan di Windows Task Scheduler." -ForegroundColor Green
     Write-Host "Jadwal: Berjalan otomatis setiap hari pukul 23:00." -ForegroundColor Green
-    Write-Host "Folder cadangan default: C:\Oriental_CRM_Backups\" -ForegroundColor Yellow
+    Write-Host "Folder cadangan: C:\Oriental_CRM_Backups" -ForegroundColor Yellow
 } catch {
-    Write-Host "`n[ERROR] Gagal mendaftarkan tugas: $_" -ForegroundColor Red
-    Write-Host "Pastikan Anda menjalankan PowerShell sebagai 'Run as Administrator'." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "[ERROR] Gagal mendaftarkan tugas: $_" -ForegroundColor Red
+    Write-Host "Pastikan Anda menjalankan PowerShell sebagai Run as Administrator." -ForegroundColor Yellow
 }
