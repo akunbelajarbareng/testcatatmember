@@ -48,10 +48,16 @@ export async function POST(request: NextRequest) {
         message: `Selamat datang, ${user.nama}`,
       });
 
+      // Tentukan apakah request menggunakan HTTPS
+      const isHttps =
+        request.nextUrl.protocol === 'https:' ||
+        request.headers.get('x-forwarded-proto') === 'https';
+
       // Set HTTP-only session cookie (berlaku 7 hari)
+      // Catatan: Hanya pasang flag secure jika benar-benar HTTPS agar tidak ditolak browser saat diakses via HTTP VPS.
       res.cookies.set('crm_session', token, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
+        secure: isHttps,
         sameSite: 'lax',
         path: '/',
         maxAge: 7 * 24 * 60 * 60, // 7 hari

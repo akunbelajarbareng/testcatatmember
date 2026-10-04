@@ -14,10 +14,14 @@ export async function POST(request: NextRequest) {
       logoutUser(token);
     }
 
+    const isHttps =
+      request.nextUrl.protocol === 'https:' ||
+      request.headers.get('x-forwarded-proto') === 'https';
+
     const res = NextResponse.json({ success: true, message: 'Berhasil logout' });
     res.cookies.set('crm_session', '', {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: isHttps,
       sameSite: 'lax',
       path: '/',
       maxAge: 0,

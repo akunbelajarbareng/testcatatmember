@@ -52,9 +52,8 @@ function LoginForm() {
       if (!res.ok || !data.success) {
         setError(data.error || "Username atau password salah");
       } else {
-        // Berhasil login, arahkan ke halaman tujuan
-        router.push(nextUrl);
-        router.refresh();
+        // Berhasil login, arahkan ke halaman tujuan dengan navigasi penuh agar sesi dan cookie terbaca sempurna
+        window.location.href = nextUrl;
       }
     } catch {
       setError("Gagal terhubung ke server. Periksa koneksi internet Anda.");
