@@ -1,6 +1,6 @@
 "use client";
 import React, { useEffect, useState } from "react";
-import { Settings, Save, CheckCircle, AlertTriangle, Database, Shield, RefreshCw, Download } from "lucide-react";
+import { Settings, Save, CheckCircle, AlertTriangle, Database, Shield, RefreshCw, Download, Clock } from "lucide-react";
 
 interface Rule {
   id: number;
@@ -17,6 +17,11 @@ export default function SettingsPage() {
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [values, setValues] = useState<Record<string, number>>({});
   const [msg, setMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  // Inactivity audit state
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditPreview, setAuditPreview] = useState<{ activeOutletsCount: number; dormantCount: number; cutoffDate: string } | null>(null);
+  const [auditResultMsg, setAuditResultMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   const loadSettings = async () => {
     setLoading(true);
@@ -39,8 +44,25 @@ export default function SettingsPage() {
     }
   };
 
+  const loadAuditPreview = async () => {
+    try {
+      const res = await fetch("/api/maintenance/audit-inactivity");
+      if (res.ok) {
+        const json = await res.json();
+        setAuditPreview({
+          activeOutletsCount: json.activeOutletsCount,
+          dormantCount: json.dormantCount,
+          cutoffDate: json.cutoffDate,
+        });
+      }
+    } catch {
+      // ignore
+    }
+  };
+
   useEffect(() => {
     loadSettings();
+    loadAuditPreview();
   }, []);
 
   const handleSave = async (key: string) => {
@@ -56,6 +78,9 @@ export default function SettingsPage() {
       if (res.ok) {
         setMsg({ type: "success", text: `Konfigurasi ${key} berhasil diperbarui!` });
         loadSettings();
+        if (key === "periode_tidak_aktif_bulan") {
+          loadAuditPreview();
+        }
       } else {
         setMsg({ type: "error", text: json.error || "Gagal memperbarui konfigurasi" });
       }
@@ -63,6 +88,45 @@ export default function SettingsPage() {
       setMsg({ type: "error", text: "Gagal menyimpan konfigurasi" });
     } finally {
       setSavingKey(null);
+    }
+  };
+
+  const handleExecuteAudit = async () => {
+    const months = values["periode_tidak_aktif_bulan"] || 3;
+    const confirm = window.confirm(
+      `Jalankan audit inaktivitas sekarang?\n\nSeluruh outlet dan akun utama yang tidak memiliki transaksi baru selama >= ${months} bulan akan ditandai nonaktif secara otomatis.`
+    );
+    if (!confirm) return;
+
+    setAuditLoading(true);
+    setAuditResultMsg(null);
+    try {
+      const res = await fetch("/api/maintenance/audit-inactivity", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        setAuditResultMsg({
+          type: "success",
+          text: json.message || "Audit inaktivitas selesai dijalankan.",
+        });
+        loadAuditPreview();
+        loadSettings();
+      } else {
+        setAuditResultMsg({
+          type: "error",
+          text: json.error || "Gagal menjalankan audit inaktivitas",
+        });
+      }
+    } catch {
+      setAuditResultMsg({
+        type: "error",
+        text: "Terjadi kesalahan saat menghubungi server",
+      });
+    } finally {
+      setAuditLoading(false);
     }
   };
 
@@ -84,6 +148,8 @@ export default function SettingsPage() {
         return "Estimasi Hemat Parkir (per 1x Transaksi Belanja)";
       case "saving_kurir_per_trx":
         return "Estimasi Hemat Kurir/Antar (per 1x Transaksi Belanja)";
+      case "periode_tidak_aktif_bulan":
+        return "Batas Inaktivitas Otomatis Akun/Outlet (Bulan)";
       default:
         return kunci;
     }
@@ -107,48 +173,57 @@ export default function SettingsPage() {
         return "Estimasi penghematan biaya parkir customer setiap 1x nota transaksi belanja di Oriental";
       case "saving_kurir_per_trx":
         return "Estimasi penghematan biaya kurir / pengantaran setiap 1x nota transaksi belanja di Oriental";
+      case "periode_tidak_aktif_bulan":
+        return "Batas durasi (dalam bulan) tanpa adanya transaksi baru sebelum outlet & akun utama ditandai nonaktif otomatis";
       default:
         return "";
     }
   };
 
-  const renderRuleItem = (r: Rule) => (
-    <div
-      key={r.kunci}
-      className="flex items-center justify-between gap-4 p-3.5 bg-slate-50 rounded-lg border border-slate-200"
-    >
-      <div className="flex-1">
-        <div className="text-xs font-bold text-slate-900 uppercase tracking-wide">
-          {getLabel(r.kunci)}
-        </div>
-        <p className="text-[11px] text-slate-500 mt-0.5">{getDesc(r.kunci) || r.keterangan || r.kunci}</p>
-      </div>
-
-      <div className="flex items-center gap-3">
-        <div className="flex items-center gap-1.5 bg-white border border-slate-300 rounded px-2.5 py-1">
-          <span className="text-xs text-slate-500 font-medium">Rp</span>
-          <input
-            type="number"
-            value={values[r.kunci] ?? r.nilai}
-            onChange={(e) => setValues({ ...values, [r.kunci]: Number(e.target.value) })}
-            className="w-28 text-sm font-mono font-bold text-slate-900 focus:outline-none"
-          />
+  const renderRuleItem = (r: Rule) => {
+    const isMonthRule = r.kunci === "periode_tidak_aktif_bulan";
+    return (
+      <div
+        key={r.kunci}
+        className="flex items-center justify-between gap-4 p-3.5 bg-slate-50 rounded-lg border border-slate-200"
+      >
+        <div className="flex-1">
+          <div className="text-xs font-bold text-slate-900 uppercase tracking-wide">
+            {getLabel(r.kunci)}
+          </div>
+          <p className="text-[11px] text-slate-500 mt-0.5">{getDesc(r.kunci) || r.keterangan || r.kunci}</p>
         </div>
 
-        <button
-          onClick={() => handleSave(r.kunci)}
-          disabled={savingKey === r.kunci || values[r.kunci] === r.nilai}
-          className="btn btn-primary btn-sm flex items-center gap-1 disabled:opacity-50"
-        >
-          <Save size={13} /> {savingKey === r.kunci ? "Menyimpan..." : "Simpan"}
-        </button>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5 bg-white border border-slate-300 rounded px-2.5 py-1">
+            {!isMonthRule && <span className="text-xs text-slate-500 font-medium">Rp</span>}
+            <input
+              type="number"
+              min={isMonthRule ? 1 : undefined}
+              step={isMonthRule ? 1 : undefined}
+              value={values[r.kunci] ?? r.nilai}
+              onChange={(e) => setValues({ ...values, [r.kunci]: Number(e.target.value) })}
+              className={`${isMonthRule ? "w-16 text-right" : "w-28"} text-sm font-mono font-bold text-slate-900 focus:outline-none`}
+            />
+            {isMonthRule && <span className="text-xs text-slate-500 font-medium">Bulan</span>}
+          </div>
+
+          <button
+            onClick={() => handleSave(r.kunci)}
+            disabled={savingKey === r.kunci || values[r.kunci] === r.nilai}
+            className="btn btn-primary btn-sm flex items-center gap-1 disabled:opacity-50"
+          >
+            <Save size={13} /> {savingKey === r.kunci ? "Menyimpan..." : "Simpan"}
+          </button>
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   const salesKeys = ["rate_retail", "rate_ukm", "rate_grosir", "nilai_kupon"];
   const wasteKeys = ["harga_uco_per_kg", "rate_waste_poin"];
   const savingKeys = ["saving_parkir_per_trx", "saving_kurir_per_trx"];
+  const inactivityKeys = ["periode_tidak_aktif_bulan"];
 
   return (
     <div className="fade-in max-w-4xl p-8">
@@ -159,7 +234,7 @@ export default function SettingsPage() {
           </h1>
           <p className="page-subtitle">Konfigurasi rate poin belanja, pembelian limbah (waste), penghematan customer, dan integritas database</p>
         </div>
-        <button onClick={loadSettings} className="btn btn-outline btn-sm" disabled={loading}>
+        <button onClick={() => { loadSettings(); loadAuditPreview(); }} className="btn btn-outline btn-sm" disabled={loading}>
           <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
         </button>
       </div>
@@ -221,6 +296,60 @@ export default function SettingsPage() {
         ) : (
           <div className="space-y-3">
             {rules.filter((r) => savingKeys.includes(r.kunci)).map(renderRuleItem)}
+          </div>
+        )}
+      </div>
+
+      {/* Rules Config Card: Inactivity & Account Automation */}
+      <div className="card p-6 mb-6">
+        <h2 className="text-base font-bold text-slate-900 mb-2 flex items-center gap-2">
+          <Clock size={18} className="text-rose-600" /> Aturan Inaktivitas &amp; Deaktivasi Otomatis (Akun Vakum)
+        </h2>
+        <p className="text-xs text-slate-500 mb-4">
+          Tentukan batas waktu tanpa transaksi baru sebelum lini bisnis dan akun customer ditandai nonaktif secara otomatis oleh sistem.
+        </p>
+
+        {loading ? (
+          <div className="py-8 text-center"><div className="spinner mx-auto" /></div>
+        ) : (
+          <div className="space-y-4">
+            {rules.filter((r) => inactivityKeys.includes(r.kunci)).map(renderRuleItem)}
+
+            {/* Audit Execution Box */}
+            <div className="p-4 bg-slate-50 rounded-lg border border-slate-200 mt-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs font-bold text-slate-900 flex items-center gap-2">
+                    <span>Audit Status Inaktivitas Seketika</span>
+                    {auditPreview && (
+                      <span className="badge badge-warning text-[10px] py-0 px-1.5 font-mono">
+                        {auditPreview.dormantCount} dari {auditPreview.activeOutletsCount} outlet vakum (&lt; {auditPreview.cutoffDate})
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    Sistem akan memindai seluruh outlet aktif. Jika tanggal transaksi belanja/waste terakhir melampaui batas bulan di atas, status outlet &amp; akun utama akan dinonaktifkan otomatis.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleExecuteAudit}
+                  disabled={auditLoading}
+                  className="btn btn-outline btn-sm text-rose-700 border-rose-300 hover:bg-rose-50 flex items-center justify-center gap-1.5 shrink-0 font-medium disabled:opacity-50"
+                >
+                  <RefreshCw size={13} className={auditLoading ? "animate-spin" : ""} />
+                  {auditLoading ? "Memproses Audit..." : "Audit & Nonaktifkan Akun Vakum Sekarang"}
+                </button>
+              </div>
+
+              {auditResultMsg && (
+                <div className={`alert alert-${auditResultMsg.type} mt-3 text-xs py-2`}>
+                  {auditResultMsg.type === "success" ? <CheckCircle size={15} /> : <AlertTriangle size={15} />}
+                  <span>{auditResultMsg.text}</span>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>

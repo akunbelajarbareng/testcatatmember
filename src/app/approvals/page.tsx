@@ -33,6 +33,7 @@ const JENIS_LABEL: Record<string, string> = {
   kode_tabrakan: "Kode Tabrakan",
   outlet_tanpa_induk: "Outlet Tanpa Akun Utama",
   kode_lama_131: "Kode POS Lama (131)",
+  transaksi_outlet_nonaktif: "Transaksi Outlet Ditutup Manual",
   anomali_master: "Anomali Master",
   invoice_berubah: "Invoice Berubah",
   nama_mirip: "Nama Mirip",
@@ -85,12 +86,20 @@ export default function ApprovalsPage() {
     setPage(1);
   };
 
-  const resolve = async (id: number, keputusan: string, outletId?: string) => {
+  const resolve = async (
+    id: number,
+    keputusan: string,
+    outletId?: string,
+    extraData?: Record<string, unknown>
+  ) => {
     setResolving(id);
     await fetch(`/api/approvals/${id}/resolve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ keputusan, data: outletId ? { outlet_id: outletId } : {} }),
+      body: JSON.stringify({
+        keputusan,
+        data: { ...(outletId ? { outlet_id: outletId } : {}), ...(extraData || {}) },
+      }),
     });
     await load();
     setResolving(null);
@@ -354,7 +363,92 @@ export default function ApprovalsPage() {
                       </div>
                     )}
 
-                    {(ap.jenis === "anomali_master" || !["nama_belum_dipetakan", "kode_tabrakan", "outlet_tanpa_induk", "kode_lama_131"].includes(ap.jenis)) && (
+                    {ap.jenis === "transaksi_outlet_nonaktif" && (
+                      <div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                          <span className="badge badge-danger" style={{ background: "#FEE2E2", color: "#991B1B", fontWeight: 700 }}>
+                            OUTLET NONAKTIF MANUAL
+                          </span>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>
+                            Invoice: {payload.no_invoice} &bull; Tgl: {payload.tanggal}
+                          </span>
+                        </div>
+
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 8, background: "#FFF7ED", border: "1px solid #FED7AA", padding: "10px 14px", borderRadius: 8, marginBottom: 10, fontSize: 12 }}>
+                          <div>
+                            <span style={{ color: "var(--text-muted)", display: "block" }}>Nama di Kasir POS:</span>
+                            <strong style={{ color: "var(--text-primary)" }}>{payload.nama_pos}</strong>
+                          </div>
+                          <div>
+                            <span style={{ color: "var(--text-muted)", display: "block" }}>Nilai Belanja:</span>
+                            <strong style={{ color: "#C2410C" }}>Rp {Number(payload.jumlah || 0).toLocaleString("id-ID")} ({payload.jenis_pembayaran || "TUNAI"})</strong>
+                          </div>
+                          <div>
+                            <span style={{ color: "var(--text-muted)", display: "block" }}>Target Lini Bisnis:</span>
+                            <strong style={{ color: "var(--navy-700)" }}>{payload.nama_outlet} ({payload.outlet_id})</strong>
+                          </div>
+                          <div>
+                            <span style={{ color: "var(--text-muted)", display: "block" }}>Pemilik (One Identity):</span>
+                            <strong style={{ color: "var(--text-primary)" }}>{payload.nama_pemilik} ({payload.identity_id})</strong>
+                          </div>
+                        </div>
+
+                        <div style={{ fontSize: 12, color: "#9A3412", marginBottom: 12, lineHeight: 1.5, background: "rgba(251, 146, 60, 0.1)", padding: "8px 12px", borderRadius: 6 }}>
+                          ⚠️ <strong>Alasan Toko Dinonaktifkan:</strong> {payload.alasan_nonaktif || "Ditutup manual oleh Owner"}
+                          <br />
+                          💡 <em>Pilih tindakan Owner di bawah ini:</em>
+                        </div>
+
+                        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                          <button
+                            className="btn btn-sm"
+                            style={{
+                              background: "#16A34A",
+                              color: "white",
+                              border: "none",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 6,
+                              fontWeight: 600,
+                            }}
+                            disabled={isBusy}
+                            onClick={() => resolve(ap.id, "disetujui", undefined, { mode: "reopen_and_link" })}
+                            title="Aktifkan kembali outlet & akun utama, lalu hubungkan faktur ini"
+                          >
+                            <CheckCircle2 size={13} /> Setujui &amp; Buka Kembali Toko
+                          </button>
+
+                          <button
+                            className="btn btn-outline btn-sm"
+                            style={{
+                              borderColor: "#EA580C",
+                              color: "#C2410C",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 6,
+                              fontWeight: 600,
+                            }}
+                            disabled={isBusy}
+                            onClick={() => resolve(ap.id, "disetujui", undefined, { mode: "link_only" })}
+                            title="Hubungkan faktur ini ke outlet untuk statement, namun status outlet TETAP ditutup"
+                          >
+                            <Plus size={13} /> Setujui Faktur Saja (Toko Tetap Tutup)
+                          </button>
+
+                          <button
+                            className="btn btn-outline btn-sm"
+                            style={{ display: "flex", alignItems: "center", gap: 6 }}
+                            disabled={isBusy}
+                            onClick={() => resolve(ap.id, "diabaikan")}
+                            title="Abaikan faktur ini (outlet tetap tertutup dan faktur tidak dihitung poin)"
+                          >
+                            <MinusCircle size={13} /> Tolak / Abaikan
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {(ap.jenis === "anomali_master" || !["nama_belum_dipetakan", "kode_tabrakan", "outlet_tanpa_induk", "kode_lama_131", "transaksi_outlet_nonaktif"].includes(ap.jenis)) && (
                       <div>
                         <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>
                           {payload.nama || payload.kode || "—"}

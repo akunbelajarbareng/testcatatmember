@@ -50,6 +50,10 @@ function initSchema(db: Database.Database) {
       provinsi      TEXT,
       nik_encrypted TEXT,                          -- AES-256, key terpisah
       status        TEXT    NOT NULL DEFAULT 'aktif', -- aktif | nonaktif
+      nonaktif_tipe TEXT,                          -- manual | otomatis
+      nonaktif_alasan TEXT,
+      nonaktif_tanggal TEXT,
+      nonaktif_oleh TEXT,
       created_at    TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
       updated_at    TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
     );
@@ -64,11 +68,16 @@ function initSchema(db: Database.Database) {
       nama_outlet   TEXT    NOT NULL,
       id_pos_lama   TEXT,                         -- kode 131-XXXXXX dari POS lama
       aktif         INTEGER NOT NULL DEFAULT 1,
+      nonaktif_tipe TEXT,                          -- manual | otomatis
+      nonaktif_alasan TEXT,
+      nonaktif_tanggal TEXT,
+      nonaktif_oleh TEXT,
       created_at    TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
       updated_at    TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
     );
     CREATE INDEX IF NOT EXISTS idx_outlets_identity ON outlets(identity_id);
     CREATE INDEX IF NOT EXISTS idx_outlets_pos_lama ON outlets(id_pos_lama);
+    CREATE INDEX IF NOT EXISTS idx_outlets_aktif    ON outlets(aktif);
 
     /* -----------------------------------------------------------------------
        pos_aliases — nama customer di export POS → outlet
@@ -159,6 +168,7 @@ function initSchema(db: Database.Database) {
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       kunci       TEXT    NOT NULL UNIQUE,        -- e.g. rate_retail, rate_ukm, rate_grosir, nilai_kupon
       nilai       REAL    NOT NULL,
+      keterangan  TEXT,
       updated_at  TEXT    NOT NULL DEFAULT (datetime('now','localtime')),
       updated_by  TEXT    NOT NULL DEFAULT 'system'
     );
@@ -311,7 +321,8 @@ function initSchema(db: Database.Database) {
       ('harga_uco_per_kg', 8000),
       ('rate_waste_poin', 10000),
       ('saving_parkir_per_trx', 2000),
-      ('saving_kurir_per_trx', 15000);
+      ('saving_kurir_per_trx', 15000),
+      ('periode_tidak_aktif_bulan', 3);
   `);
 
   // Migrasi kolom whatsapp pada identities jika belum ada
@@ -341,9 +352,37 @@ function initSchema(db: Database.Database) {
     }
   }
 
+  // Migrasi kolom nonaktif pada identities & outlets jika belum ada
+  const deactivationCols = [
+    'nonaktif_tipe TEXT',
+    'nonaktif_alasan TEXT',
+    'nonaktif_tanggal TEXT',
+    'nonaktif_oleh TEXT',
+  ];
+
+  for (const col of deactivationCols) {
+    try {
+      db.exec(`ALTER TABLE identities ADD COLUMN ${col};`);
+    } catch {
+      // Kolom sudah ada
+    }
+    try {
+      db.exec(`ALTER TABLE outlets ADD COLUMN ${col};`);
+    } catch {
+      // Kolom sudah ada
+    }
+  }
+
   // Migrasi kolom void_reason pada coupons jika belum ada
   try {
     db.exec(`ALTER TABLE coupons ADD COLUMN void_reason TEXT;`);
+  } catch {
+    // Kolom sudah ada
+  }
+
+  // Migrasi kolom keterangan pada rules_config jika belum ada
+  try {
+    db.exec(`ALTER TABLE rules_config ADD COLUMN keterangan TEXT;`);
   } catch {
     // Kolom sudah ada
   }

@@ -388,13 +388,36 @@ export async function importTransaksi(buffer: Buffer, filename: string, bulan: s
   const outletNamas = db.prepare(`SELECT nama_outlet FROM outlets`).all() as { nama_outlet: string }[];
   for (const o of outletNamas) masterNamas.add(o.nama_outlet);
 
-  // Collect outlet tipe & identity_id untuk kalkulasi & exclusion
-  const outletTipeMap = new Map<string, OutletTipe>();
-  const outletIdentityMap = new Map<string, string>();
-  const outletRows = db.prepare(`SELECT id, tipe, identity_id FROM outlets`).all() as { id: string; tipe: OutletTipe; identity_id: string }[];
+  // Collect outlet metadata untuk status keaktifan, kalkulasi & exclusion
+  interface OutletMeta {
+    id: string;
+    tipe: OutletTipe;
+    identity_id: string;
+    nama_outlet: string;
+    aktif: number;
+    nonaktif_tipe: 'manual' | 'otomatis' | null;
+    nonaktif_alasan: string | null;
+    nonaktif_tanggal: string | null;
+  }
+
+  interface IdentityMeta {
+    id: string;
+    nama_pemilik: string;
+    status: string;
+    nonaktif_tipe: 'manual' | 'otomatis' | null;
+    nonaktif_alasan: string | null;
+  }
+
+  const outletMap = new Map<string, OutletMeta>();
+  const outletRows = db.prepare(`SELECT id, tipe, identity_id, nama_outlet, aktif, nonaktif_tipe, nonaktif_alasan, nonaktif_tanggal FROM outlets`).all() as OutletMeta[];
   for (const o of outletRows) {
-    outletTipeMap.set(o.id, o.tipe);
-    outletIdentityMap.set(o.id, o.identity_id);
+    outletMap.set(o.id, o);
+  }
+
+  const identityMap = new Map<string, IdentityMeta>();
+  const identityRows = db.prepare(`SELECT id, nama_pemilik, status, nonaktif_tipe, nonaktif_alasan FROM identities`).all() as IdentityMeta[];
+  for (const iden of identityRows) {
+    identityMap.set(iden.id, iden);
   }
 
   // Preload exclusions per identity
@@ -440,26 +463,127 @@ export async function importTransaksi(buffer: Buffer, filename: string, bulan: s
       }
 
       // Cek pemetaan alias
-      const outletId = aliasMap.get(namaCustomer) || null;
+      let targetOutletId = aliasMap.get(namaCustomer) || null;
 
       let poin = 0;
       let kupon = 0;
       let isExcluded = 0;
 
-      if (outletId) {
-        const tipe = outletTipeMap.get(outletId);
-        const identityId = outletIdentityMap.get(outletId);
-        const userExclusions = identityId ? exclusionsMap.get(identityId) || [] : [];
-        const isDateExcluded = userExclusions.some(ex => tanggal >= ex.dari && tanggal <= ex.sampai);
+      if (targetOutletId) {
+        const outlet = outletMap.get(targetOutletId);
+        const identity = outlet ? identityMap.get(outlet.identity_id) : null;
 
-        if (isDateExcluded) {
-          isExcluded = 1;
+        const isOutletManualClosed = outlet && outlet.aktif === 0 && outlet.nonaktif_tipe === 'manual';
+        const isIdentityManualClosed = identity && identity.status === 'nonaktif' && identity.nonaktif_tipe === 'manual';
+
+        const isOutletAutoClosed = outlet && outlet.aktif === 0 && outlet.nonaktif_tipe === 'otomatis';
+        const isIdentityAutoClosed = identity && identity.status === 'nonaktif' && identity.nonaktif_tipe === 'otomatis';
+
+        if (isOutletManualClosed || isIdentityManualClosed) {
+          // =========================================================================
+          // OPSI 1: Outlet / Akun ditutup MANUAL oleh Owner
+          // Transaksi TIDAK langsung di-link & TIDAK auto-reopen secara diam-diam.
+          // Masuk ke antrean approval 'transaksi_outlet_nonaktif' untuk diverifikasi Owner.
+          // =========================================================================
+          barisWarn++;
+
+          const existingApproval = db.prepare(`
+            SELECT id FROM approvals
+            WHERE jenis = 'transaksi_outlet_nonaktif'
+              AND json_extract(payload, '$.no_invoice') = ?
+              AND json_extract(payload, '$.nama_pos') = ?
+          `).get(noInvoice, namaCustomer);
+
+          if (!existingApproval) {
+            const alasanNonaktif = outlet?.nonaktif_alasan || identity?.nonaktif_alasan || 'Ditutup secara manual oleh Owner';
+            peringatan.push(`Transaksi ${noInvoice} (${namaCustomer}) masuk untuk outlet nonaktif manual ${targetOutletId}. Butuh persetujuan Owner.`);
+            db.prepare(`INSERT INTO approvals(jenis, payload, batch_id) VALUES (?, ?, ?)`).run(
+              'transaksi_outlet_nonaktif',
+              JSON.stringify({
+                outlet_id: targetOutletId,
+                identity_id: outlet?.identity_id,
+                nama_outlet: outlet?.nama_outlet,
+                nama_pemilik: identity?.nama_pemilik,
+                no_invoice: noInvoice,
+                tanggal,
+                jumlah,
+                jenis_pembayaran: jenis,
+                nama_pos: namaCustomer,
+                alasan_nonaktif: alasanNonaktif,
+                nonaktif_tanggal: outlet?.nonaktif_tanggal,
+                keterangan: `Faktur POS masuk untuk outlet yang telah dinonaktifkan manual oleh Owner (${alasanNonaktif}). Perlu ditinjau apakah toko beroperasi kembali.`,
+              }),
+              batchId
+            );
+            approvalCount++;
+          }
+
+          // Jangan kaitkan ke outlet yang tutup manual (tahan transaksi sampai disetujui Owner)
+          targetOutletId = null;
           poin = 0;
           kupon = 0;
-        } else if (tipe) {
-          const hasil = hitungInvoice(jumlah, tipe);
-          poin = hasil.poin;
-          kupon = hasil.kupon;
+
+        } else {
+          // Jika outlet nonaktif OTOMATIS (inaktivitas > 3 bulan) -> AUTO REOPEN!
+          if (isOutletAutoClosed || isIdentityAutoClosed) {
+            if (outlet && outlet.aktif === 0) {
+              db.prepare(`
+                UPDATE outlets SET
+                  aktif = 1,
+                  nonaktif_tipe = NULL,
+                  nonaktif_alasan = NULL,
+                  nonaktif_tanggal = NULL,
+                  nonaktif_oleh = NULL,
+                  updated_at = datetime('now','localtime')
+                WHERE id = ?
+              `).run(targetOutletId);
+              outlet.aktif = 1;
+              outlet.nonaktif_tipe = null;
+              outlet.nonaktif_alasan = null;
+            }
+
+            if (identity && identity.status === 'nonaktif') {
+              db.prepare(`
+                UPDATE identities SET
+                  status = 'aktif',
+                  nonaktif_tipe = NULL,
+                  nonaktif_alasan = NULL,
+                  nonaktif_tanggal = NULL,
+                  nonaktif_oleh = NULL,
+                  updated_at = datetime('now','localtime')
+                WHERE id = ?
+              `).run(identity.id);
+              identity.status = 'aktif';
+              identity.nonaktif_tipe = null;
+              identity.nonaktif_alasan = null;
+            }
+
+            db.prepare(`
+              INSERT INTO audit_log(aksi, tabel, record_id, keterangan)
+              VALUES (?, ?, ?, ?)
+            `).run(
+              'auto_reactivate',
+              'outlets',
+              targetOutletId,
+              `Auto-reaktivasi outlet ${targetOutletId} (${outlet?.nama_outlet}) dan akun ${identity?.id} karena transaksi baru (${noInvoice}, ${tanggal}) pada import batch ${batchId}.`
+            );
+          }
+
+          // Proses hitung poin & kupon seperti biasa
+          const tipe = outlet?.tipe;
+          const identityId = outlet?.identity_id;
+          const userExclusions = identityId ? exclusionsMap.get(identityId) || [] : [];
+          const isDateExcluded = userExclusions.some(ex => tanggal >= ex.dari && tanggal <= ex.sampai);
+
+          if (isDateExcluded) {
+            isExcluded = 1;
+            poin = 0;
+            kupon = 0;
+          } else if (tipe) {
+            const hasil = hitungInvoice(jumlah, tipe);
+            poin = hasil.poin;
+            kupon = hasil.kupon;
+          }
         }
       } else {
         // Nama belum terpetakan — beri peringatan (tidak menghalangi impor)
@@ -480,7 +604,7 @@ export async function importTransaksi(buffer: Buffer, filename: string, bulan: s
       }
 
       // Insert invoice (UNIQUE constraint akan skip duplikat otomatis)
-      const result = insertInvoice.run(noInvoice, tanggal, namaCustomer, jenis, jumlah, batchId, outletId, poin, kupon, isExcluded);
+      const result = insertInvoice.run(noInvoice, tanggal, namaCustomer, jenis, jumlah, batchId, targetOutletId, poin, kupon, isExcluded);
       if (result.changes > 0) {
         barisOk++;
       } else {

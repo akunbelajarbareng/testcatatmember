@@ -614,3 +614,361 @@ export function mergeIdentities(
   };
 }
 
+// ---------------------------------------------------------------------------
+// 7. DEAKTIVASI & AKTIVASI IDENTITY & OUTLET (MANUAL & OTOMATIS)
+// ---------------------------------------------------------------------------
+export interface DeactivateOptions {
+  tipe?: 'manual' | 'otomatis';
+  alasan?: string;
+  oleh?: string;
+  cascadeOutlets?: boolean;
+}
+
+export function deactivateIdentity(
+  identityId: string,
+  options: DeactivateOptions = {}
+): { id: string; deactivatedOutletsCount: number } {
+  const existing = db.prepare(`SELECT * FROM identities WHERE id = ?`).get(identityId) as { id: string; nama_pemilik: string; status: string } | undefined;
+  if (!existing) throw new Error(`Identity "${identityId}" tidak ditemukan`);
+
+  const tipe = options.tipe || 'manual';
+  const alasan = options.alasan || (tipe === 'manual' ? 'Dinonaktifkan secara manual oleh Owner' : 'Nonaktif otomatis (inaktivitas)');
+  const oleh = options.oleh || (tipe === 'manual' ? 'Owner' : 'Sistem Otomatis');
+  const cascade = options.cascadeOutlets !== false; // default true
+
+  let deactivatedOutletsCount = 0;
+
+  const doDeactivate = db.transaction(() => {
+    // 1. Update status identity
+    db.prepare(`
+      UPDATE identities SET
+        status = 'nonaktif',
+        nonaktif_tipe = ?,
+        nonaktif_alasan = ?,
+        nonaktif_tanggal = datetime('now','localtime'),
+        nonaktif_oleh = ?,
+        updated_at = datetime('now','localtime')
+      WHERE id = ?
+    `).run(tipe, alasan, oleh, identityId);
+
+    // 2. Cascade ke seluruh outlet anak yang masih aktif
+    if (cascade) {
+      const res = db.prepare(`
+        UPDATE outlets SET
+          aktif = 0,
+          nonaktif_tipe = ?,
+          nonaktif_alasan = ?,
+          nonaktif_tanggal = datetime('now','localtime'),
+          nonaktif_oleh = ?,
+          updated_at = datetime('now','localtime')
+        WHERE identity_id = ? AND aktif = 1
+      `).run(tipe, `Mengikuti Akun Utama dinonaktifkan: ${alasan}`, oleh, identityId);
+      deactivatedOutletsCount = res.changes;
+    }
+
+    // 3. Audit Log
+    db.prepare(`
+      INSERT INTO audit_log(aksi, tabel, record_id, keterangan)
+      VALUES (?, ?, ?, ?)
+    `).run(
+      'deactivate',
+      'identities',
+      identityId,
+      `Nonaktifkan akun utama ${identityId} (${existing.nama_pemilik}) [Tipe: ${tipe}]. Alasan: ${alasan}. Oleh: ${oleh}. ${deactivatedOutletsCount} outlet anak ikut dinonaktifkan.`
+    );
+  });
+
+  doDeactivate();
+  return { id: identityId, deactivatedOutletsCount };
+}
+
+export function activateIdentity(
+  identityId: string,
+  options: { oleh?: string; cascadeOutlets?: boolean } = {}
+): { id: string; reactivatedOutletsCount: number } {
+  const existing = db.prepare(`SELECT * FROM identities WHERE id = ?`).get(identityId) as { id: string; nama_pemilik: string; status: string } | undefined;
+  if (!existing) throw new Error(`Identity "${identityId}" tidak ditemukan`);
+
+  const oleh = options.oleh || 'Owner';
+  const cascade = options.cascadeOutlets === true;
+  let reactivatedOutletsCount = 0;
+
+  const doActivate = db.transaction(() => {
+    db.prepare(`
+      UPDATE identities SET
+        status = 'aktif',
+        nonaktif_tipe = NULL,
+        nonaktif_alasan = NULL,
+        nonaktif_tanggal = NULL,
+        nonaktif_oleh = NULL,
+        updated_at = datetime('now','localtime')
+      WHERE id = ?
+    `).run(identityId);
+
+    if (cascade) {
+      const res = db.prepare(`
+        UPDATE outlets SET
+          aktif = 1,
+          nonaktif_tipe = NULL,
+          nonaktif_alasan = NULL,
+          nonaktif_tanggal = NULL,
+          nonaktif_oleh = NULL,
+          updated_at = datetime('now','localtime')
+        WHERE identity_id = ? AND aktif = 0
+      `).run(identityId);
+      reactivatedOutletsCount = res.changes;
+    }
+
+    db.prepare(`
+      INSERT INTO audit_log(aksi, tabel, record_id, keterangan)
+      VALUES (?, ?, ?, ?)
+    `).run(
+      'activate',
+      'identities',
+      identityId,
+      `Aktivasi kembali akun utama ${identityId} (${existing.nama_pemilik}). Oleh: ${oleh}.${cascade ? ` (${reactivatedOutletsCount} outlet diaktifkan kembali)` : ''}`
+    );
+  });
+
+  doActivate();
+  return { id: identityId, reactivatedOutletsCount };
+}
+
+export function deactivateOutlet(
+  outletId: string,
+  options: DeactivateOptions = {}
+): { id: string; identityDeactivated: boolean } {
+  const outlet = db.prepare(`SELECT * FROM outlets WHERE id = ?`).get(outletId) as { id: string; identity_id: string; nama_outlet: string; aktif: number } | undefined;
+  if (!outlet) throw new Error(`Outlet "${outletId}" tidak ditemukan`);
+
+  const tipe = options.tipe || 'manual';
+  const alasan = options.alasan || (tipe === 'manual' ? 'Dinonaktifkan secara manual oleh Owner' : 'Nonaktif otomatis (inaktivitas)');
+  const oleh = options.oleh || (tipe === 'manual' ? 'Owner' : 'Sistem Otomatis');
+
+  let identityDeactivated = false;
+
+  const doDeactivate = db.transaction(() => {
+    // 1. Nonaktifkan outlet
+    db.prepare(`
+      UPDATE outlets SET
+        aktif = 0,
+        nonaktif_tipe = ?,
+        nonaktif_alasan = ?,
+        nonaktif_tanggal = datetime('now','localtime'),
+        nonaktif_oleh = ?,
+        updated_at = datetime('now','localtime')
+      WHERE id = ?
+    `).run(tipe, alasan, oleh, outletId);
+
+    // 2. Cek apakah seluruh outlet milik identity ini sekarang sudah nonaktif
+    const activeCount = (db.prepare(`
+      SELECT COUNT(*) as c FROM outlets WHERE identity_id = ? AND aktif = 1
+    `).get(outlet.identity_id) as { c: number }).c;
+
+    if (activeCount === 0) {
+      db.prepare(`
+        UPDATE identities SET
+          status = 'nonaktif',
+          nonaktif_tipe = ?,
+          nonaktif_alasan = 'Semua lini bisnis tidak aktif',
+          nonaktif_tanggal = datetime('now','localtime'),
+          nonaktif_oleh = ?,
+          updated_at = datetime('now','localtime')
+        WHERE id = ? AND status = 'aktif'
+      `).run(tipe, oleh, outlet.identity_id);
+      identityDeactivated = true;
+    }
+
+    // 3. Audit Log
+    db.prepare(`
+      INSERT INTO audit_log(aksi, tabel, record_id, keterangan)
+      VALUES (?, ?, ?, ?)
+    `).run(
+      'deactivate',
+      'outlets',
+      outletId,
+      `Nonaktifkan outlet ${outletId} (${outlet.nama_outlet}) [Tipe: ${tipe}]. Alasan: ${alasan}. Oleh: ${oleh}.${identityDeactivated ? ' (Akun utama ikut dinonaktifkan karena seluruh lini bisnis nonaktif)' : ''}`
+    );
+  });
+
+  doDeactivate();
+  return { id: outletId, identityDeactivated };
+}
+
+export function activateOutlet(
+  outletId: string,
+  options: { oleh?: string } = {}
+): { id: string; identityReactivated: boolean } {
+  const outlet = db.prepare(`SELECT * FROM outlets WHERE id = ?`).get(outletId) as { id: string; identity_id: string; nama_outlet: string; aktif: number } | undefined;
+  if (!outlet) throw new Error(`Outlet "${outletId}" tidak ditemukan`);
+
+  const oleh = options.oleh || 'Owner';
+  let identityReactivated = false;
+
+  const doActivate = db.transaction(() => {
+    // 1. Aktifkan outlet
+    db.prepare(`
+      UPDATE outlets SET
+        aktif = 1,
+        nonaktif_tipe = NULL,
+        nonaktif_alasan = NULL,
+        nonaktif_tanggal = NULL,
+        nonaktif_oleh = NULL,
+        updated_at = datetime('now','localtime')
+      WHERE id = ?
+    `).run(outletId);
+
+    // 2. Pastikan akun utama induknya aktif jika sebelumnya nonaktif
+    const parentIdentity = db.prepare(`SELECT id, status FROM identities WHERE id = ?`).get(outlet.identity_id) as { id: string; status: string } | undefined;
+    if (parentIdentity && parentIdentity.status === 'nonaktif') {
+      db.prepare(`
+        UPDATE identities SET
+          status = 'aktif',
+          nonaktif_tipe = NULL,
+          nonaktif_alasan = NULL,
+          nonaktif_tanggal = NULL,
+          nonaktif_oleh = NULL,
+          updated_at = datetime('now','localtime')
+        WHERE id = ?
+      `).run(outlet.identity_id);
+      identityReactivated = true;
+    }
+
+    // 3. Audit Log
+    db.prepare(`
+      INSERT INTO audit_log(aksi, tabel, record_id, keterangan)
+      VALUES (?, ?, ?, ?)
+    `).run(
+      'activate',
+      'outlets',
+      outletId,
+      `Aktivasi kembali outlet ${outletId} (${outlet.nama_outlet}). Oleh: ${oleh}.${identityReactivated ? ' (Akun utama diaktifkan kembali secara otomatis)' : ''}`
+    );
+  });
+
+  doActivate();
+  return { id: outletId, identityReactivated };
+}
+
+// ---------------------------------------------------------------------------
+// 8. AUDIT INAKTIVITAS OTOMATIS BERDASARKAN PERIODE
+// ---------------------------------------------------------------------------
+export interface InactivityAuditResult {
+  thresholdMonths: number;
+  cutoffDate: string;
+  asOfDate: string;
+  checkedOutlets: number;
+  deactivatedOutlets: { id: string; nama: string; lastActivity: string }[];
+  deactivatedIdentities: { id: string; nama: string }[];
+}
+
+export function auditInactivity(asOfDate?: string): InactivityAuditResult {
+  const row = db.prepare(`SELECT nilai FROM rules_config WHERE kunci = 'periode_tidak_aktif_bulan'`).get() as { nilai: number } | undefined;
+  const thresholdMonths = row && row.nilai > 0 ? Number(row.nilai) : 3;
+
+  const now = asOfDate ? new Date(asOfDate) : new Date();
+  const asOfDateStr = now.toISOString().slice(0, 10);
+
+  // Hitung tanggal cutoff: now dikurangi thresholdMonths
+  const cutoffTarget = new Date(now.getFullYear(), now.getMonth() - thresholdMonths, now.getDate());
+  const cutoffDate = cutoffTarget.toISOString().slice(0, 10);
+
+  const activeOutlets = db.prepare(`
+    SELECT id, identity_id, nama_outlet, created_at
+    FROM outlets
+    WHERE aktif = 1
+  `).all() as { id: string; identity_id: string; nama_outlet: string; created_at: string }[];
+
+  const deactivatedOutlets: { id: string; nama: string; lastActivity: string }[] = [];
+  const deactivatedIdentities: { id: string; nama: string }[] = [];
+
+  const doAudit = db.transaction(() => {
+    for (const o of activeOutlets) {
+      // Ambil transaksi belanja terakhir
+      const lastInv = db.prepare(`SELECT MAX(tanggal) as max_d FROM invoices WHERE outlet_id = ?`).get(o.id) as { max_d: string | null } | undefined;
+      // Ambil transaksi waste terakhir
+      const lastWaste = db.prepare(`SELECT MAX(tanggal) as max_d FROM waste_purchases WHERE outlet_id = ?`).get(o.id) as { max_d: string | null } | undefined;
+      // Tanggal outlet dibuat
+      const createdDate = o.created_at ? o.created_at.slice(0, 10) : '2026-09-01';
+
+      const candidateDates = [lastInv?.max_d, lastWaste?.max_d, createdDate].filter((d): d is string => Boolean(d));
+      candidateDates.sort().reverse();
+      const lastActivity = candidateDates[0] || '2026-09-01';
+
+      // Jika aktivitas terakhir lebih lama dari tanggal cutoff -> Nonaktifkan otomatis
+      if (lastActivity < cutoffDate) {
+        db.prepare(`
+          UPDATE outlets SET
+            aktif = 0,
+            nonaktif_tipe = 'otomatis',
+            nonaktif_alasan = ?,
+            nonaktif_tanggal = datetime('now','localtime'),
+            nonaktif_oleh = 'Sistem Otomatis',
+            updated_at = datetime('now','localtime')
+          WHERE id = ?
+        `).run(`Tidak ada transaksi selama >= ${thresholdMonths} bulan (Aktivitas terakhir: ${lastActivity})`, o.id);
+
+        deactivatedOutlets.push({
+          id: o.id,
+          nama: o.nama_outlet,
+          lastActivity,
+        });
+      }
+    }
+
+    // Periksa akun utama yang seluruh outletnya sekarang sudah nonaktif
+    const activeIdentities = db.prepare(`
+      SELECT id, nama_pemilik
+      FROM identities
+      WHERE status = 'aktif'
+    `).all() as { id: string; nama_pemilik: string }[];
+
+    for (const ident of activeIdentities) {
+      const activeCount = (db.prepare(`
+        SELECT COUNT(*) as c FROM outlets WHERE identity_id = ? AND aktif = 1
+      `).get(ident.id) as { c: number }).c;
+
+      if (activeCount === 0) {
+        db.prepare(`
+          UPDATE identities SET
+            status = 'nonaktif',
+            nonaktif_tipe = 'otomatis',
+            nonaktif_alasan = ?,
+            nonaktif_tanggal = datetime('now','localtime'),
+            nonaktif_oleh = 'Sistem Otomatis',
+            updated_at = datetime('now','localtime')
+          WHERE id = ?
+        `).run(`Seluruh lini bisnis nonaktif (Audit otomatis >= ${thresholdMonths} bulan)`, ident.id);
+
+        deactivatedIdentities.push({
+          id: ident.id,
+          nama: ident.nama_pemilik,
+        });
+      }
+    }
+
+    if (deactivatedOutlets.length > 0 || deactivatedIdentities.length > 0) {
+      db.prepare(`
+        INSERT INTO audit_log(aksi, tabel, record_id, keterangan)
+        VALUES (?, ?, ?, ?)
+      `).run(
+        'auto_deactivate',
+        'system',
+        'audit_inactivity',
+        `Audit inaktivitas otomatis (${thresholdMonths} bulan, cutoff: ${cutoffDate}): ${deactivatedOutlets.length} outlet dan ${deactivatedIdentities.length} akun utama dinonaktifkan.`
+      );
+    }
+  });
+
+  doAudit();
+
+  return {
+    thresholdMonths,
+    cutoffDate,
+    asOfDate: asOfDateStr,
+    checkedOutlets: activeOutlets.length,
+    deactivatedOutlets,
+    deactivatedIdentities,
+  };
+}
+

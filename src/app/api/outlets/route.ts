@@ -15,6 +15,7 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const identityId = searchParams.get('identity_id') || '';
   const q = searchParams.get('q') || '';
+  const status = searchParams.get('status') || ''; // 'aktif' | 'nonaktif' | ''
 
   const outlets = db.prepare(`
     SELECT o.*,
@@ -28,6 +29,7 @@ export async function GET(request: NextRequest) {
     LEFT JOIN invoices inv ON inv.outlet_id = o.id AND inv.is_excluded = 0
     WHERE 1=1
       ${identityId ? 'AND o.identity_id = ?' : ''}
+      ${status === 'aktif' ? 'AND o.aktif = 1' : status === 'nonaktif' ? 'AND o.aktif = 0' : ''}
       ${q ? 'AND (o.nama_outlet LIKE ? OR o.id LIKE ?)' : ''}
     GROUP BY o.id
     ORDER BY iden.nama_pemilik, o.tipe

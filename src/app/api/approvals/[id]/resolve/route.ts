@@ -70,6 +70,66 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           // Owner sudah review / menyelesaikan secara manual
           break;
 
+        case 'transaksi_outlet_nonaktif': {
+          const mode = data?.mode || 'reopen_and_link';
+          const outletId = payload.outlet_id;
+          const identityId = payload.identity_id;
+
+          if (mode === 'reopen_and_link') {
+            // 1. Reopen outlet
+            db.prepare(`
+              UPDATE outlets SET
+                aktif = 1,
+                nonaktif_tipe = NULL,
+                nonaktif_alasan = NULL,
+                nonaktif_tanggal = NULL,
+                nonaktif_oleh = NULL,
+                updated_at = datetime('now','localtime')
+              WHERE id = ?
+            `).run(outletId);
+
+            // 2. Reopen identity if needed
+            if (identityId) {
+              db.prepare(`
+                UPDATE identities SET
+                  status = 'aktif',
+                  nonaktif_tipe = NULL,
+                  nonaktif_alasan = NULL,
+                  nonaktif_tanggal = NULL,
+                  nonaktif_oleh = NULL,
+                  updated_at = datetime('now','localtime')
+                WHERE id = ? AND status = 'nonaktif'
+              `).run(identityId);
+            }
+          }
+
+          // Link the invoice and recalculate points & coupons
+          const outlet = db.prepare(`SELECT tipe, identity_id FROM outlets WHERE id = ?`).get(outletId) as { tipe: import('@/lib/calc').OutletTipe; identity_id: string } | undefined;
+          if (outlet) {
+            const { hitungInvoice } = require('@/lib/calc');
+            const invoices = db.prepare(`
+              SELECT id, jumlah FROM invoices
+              WHERE no_invoice = ? AND nama_pos = ?
+            `).all(payload.no_invoice, payload.nama_pos) as { id: number; jumlah: number }[];
+
+            const exclusions = db.prepare(`SELECT dari, sampai FROM exclusions WHERE identity_id = ?`).all(outlet.identity_id) as { dari: string; sampai: string }[];
+            const updateInv = db.prepare(`UPDATE invoices SET outlet_id = ?, poin = ?, kupon = ?, is_excluded = ? WHERE id = ?`);
+
+            for (const inv of invoices) {
+              const isExcluded = exclusions.some(ex => payload.tanggal >= ex.dari && payload.tanggal <= ex.sampai);
+              if (isExcluded) {
+                updateInv.run(outletId, 0, 0, 1, inv.id);
+              } else {
+                const hasil = hitungInvoice(inv.jumlah, outlet.tipe);
+                updateInv.run(outletId, hasil.poin, hasil.kupon, 0, inv.id);
+              }
+            }
+
+            db.prepare(`UPDATE statements SET status = 'perlu_revisi', updated_at = datetime('now','localtime') WHERE identity_id = ?`).run(outlet.identity_id);
+          }
+          break;
+        }
+
         default:
           break;
       }

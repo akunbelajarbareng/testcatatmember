@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import {
   ArrowLeft, FileText, Store, GitMerge, Award, Ticket, Banknote,
   ChevronRight, Edit3, Trash2, X, CheckCircle2, AlertCircle, AlertTriangle,
-  Lock, ArrowRight, ShieldCheck, Check, Info, Plus, ArrowRightLeft, Unlink, RefreshCw
+  Lock, ArrowRight, ShieldCheck, Check, Info, Plus, ArrowRightLeft, Unlink, RefreshCw,
+  Power, PowerOff
 } from "lucide-react";
 
 function fmt(n: number) { return n.toLocaleString("id-ID"); }
@@ -15,6 +16,10 @@ interface Identity {
   id: string; nama_pemilik: string; alamat: string; kecamatan: string;
   kota: string; kode_pos: string; provinsi: string; status: string;
   whatsapp?: string;
+  nonaktif_tipe?: 'manual' | 'otomatis' | null;
+  nonaktif_alasan?: string | null;
+  nonaktif_tanggal?: string | null;
+  nonaktif_oleh?: string | null;
   is_suspended?: number;
   suspend_type?: 'temporary' | 'permanent' | null;
   suspend_dari?: string | null;
@@ -56,6 +61,10 @@ interface PenaltyInfo {
 interface Outlet {
   id: string; tipe: string; nama_outlet: string; id_pos_lama: string | null;
   aktif: number; aliases: string | null;
+  nonaktif_tipe?: 'manual' | 'otomatis' | null;
+  nonaktif_alasan?: string | null;
+  nonaktif_tanggal?: string | null;
+  nonaktif_oleh?: string | null;
 }
 interface Statement {
   id: number; bulan: string; status: string; revisi: number;
@@ -180,6 +189,20 @@ export default function IdentityDetailPage({ params }: { params: Promise<{ id: s
   const [revokePassword, setRevokePassword] = useState("");
   const [revokeSubmitting, setRevokeSubmitting] = useState(false);
   const [revokeError, setRevokeError] = useState("");
+
+  // Deactivate Customer Modal State
+  const [showDeactivateCustomerModal, setShowDeactivateCustomerModal] = useState(false);
+  const [deactivateCustomerReason, setDeactivateCustomerReason] = useState("");
+  const [cascadeOutlets, setCascadeOutlets] = useState(true);
+  const [submittingCustomerStatus, setSubmittingCustomerStatus] = useState(false);
+  const [customerStatusError, setCustomerStatusError] = useState("");
+
+  // Deactivate Outlet Modal State
+  const [selectedOutletForStatus, setSelectedOutletForStatus] = useState<Outlet | null>(null);
+  const [showDeactivateOutletModal, setShowDeactivateOutletModal] = useState(false);
+  const [deactivateOutletReason, setDeactivateOutletReason] = useState("");
+  const [submittingOutletStatus, setSubmittingOutletStatus] = useState(false);
+  const [outletStatusError, setOutletStatusError] = useState("");
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -359,6 +382,111 @@ export default function IdentityDetailPage({ params }: { params: Promise<{ id: s
       setRevokeError(err instanceof Error ? err.message : "Terjadi kesalahan saat mencabut sanksi");
     } finally {
       setRevokeSubmitting(false);
+    }
+  };
+
+  // Deactivate Customer Handlers
+  const handleDeactivateCustomer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!deactivateCustomerReason.trim()) {
+      setCustomerStatusError("Alasan penonaktifan akun wajib diisi");
+      return;
+    }
+
+    setSubmittingCustomerStatus(true);
+    setCustomerStatusError("");
+    try {
+      const res = await fetch(`/api/identities/${encodeURIComponent(id)}/status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "deactivate",
+          alasan: deactivateCustomerReason.trim(),
+          cascadeOutlets,
+        }),
+      });
+
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Gagal menonaktifkan akun");
+
+      setShowDeactivateCustomerModal(false);
+      await loadData();
+    } catch (err) {
+      setCustomerStatusError(err instanceof Error ? err.message : "Terjadi kesalahan");
+    } finally {
+      setSubmittingCustomerStatus(false);
+    }
+  };
+
+  const handleActivateCustomer = async () => {
+    if (!confirm(`Aktifkan kembali akun customer "${identity?.nama_pemilik}" (${id})?`)) return;
+
+    try {
+      const res = await fetch(`/api/identities/${encodeURIComponent(id)}/status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "activate", cascadeOutlets: true }),
+      });
+
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Gagal mengaktifkan akun");
+
+      await loadData();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Terjadi kesalahan");
+    }
+  };
+
+  // Deactivate Outlet Handlers
+  const handleDeactivateOutlet = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedOutletForStatus) return;
+    if (!deactivateOutletReason.trim()) {
+      setOutletStatusError("Alasan penonaktifan outlet wajib diisi");
+      return;
+    }
+
+    setSubmittingOutletStatus(true);
+    setOutletStatusError("");
+    try {
+      const res = await fetch(`/api/outlets/${encodeURIComponent(selectedOutletForStatus.id)}/status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "deactivate",
+          alasan: deactivateOutletReason.trim(),
+        }),
+      });
+
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Gagal menonaktifkan outlet");
+
+      setShowDeactivateOutletModal(false);
+      setSelectedOutletForStatus(null);
+      await loadData();
+    } catch (err) {
+      setOutletStatusError(err instanceof Error ? err.message : "Terjadi kesalahan");
+    } finally {
+      setSubmittingOutletStatus(false);
+    }
+  };
+
+  const handleActivateOutlet = async (o: Outlet) => {
+    if (!confirm(`Aktifkan kembali outlet "${o.nama_outlet}" (${o.id})?`)) return;
+
+    try {
+      const res = await fetch(`/api/outlets/${encodeURIComponent(o.id)}/status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "activate" }),
+      });
+
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Gagal mengaktifkan outlet");
+
+      await loadData();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Terjadi kesalahan");
     }
   };
 
@@ -707,6 +835,45 @@ export default function IdentityDetailPage({ params }: { params: Promise<{ id: s
               </button>
             )}
 
+            {identity.status === "aktif" ? (
+              <button
+                onClick={() => {
+                  setDeactivateCustomerReason("Toko / bisnis customer telah ditutup oleh pemilik");
+                  setCascadeOutlets(true);
+                  setCustomerStatusError("");
+                  setShowDeactivateCustomerModal(true);
+                }}
+                className="btn btn-sm"
+                style={{
+                  background: "#FFF1F2",
+                  color: "#E11D48",
+                  border: "1px solid #FECDD3",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  fontWeight: 600,
+                }}
+              >
+                <PowerOff size={14} /> Nonaktifkan Akun
+              </button>
+            ) : identity.status === "nonaktif" ? (
+              <button
+                onClick={handleActivateCustomer}
+                className="btn btn-sm"
+                style={{
+                  background: "#F0FDF4",
+                  color: "#16A34A",
+                  border: "1px solid #BBF7D0",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  fontWeight: 600,
+                }}
+              >
+                <Power size={14} /> Aktifkan Kembali Akun
+              </button>
+            ) : null}
+
             <button
               onClick={openMergeModal}
               className="btn btn-outline btn-sm"
@@ -812,13 +979,20 @@ export default function IdentityDetailPage({ params }: { params: Promise<{ id: s
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
           <div>
             <h1 className="page-title" style={{ fontSize: 24 }}>{identity.nama_pemilik}</h1>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 4 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 4, flexWrap: "wrap" }}>
               <span style={{ fontFamily: "monospace", fontSize: 13, background: "var(--navy-50)", color: "var(--navy-700)", padding: "2px 8px", borderRadius: 4, fontWeight: 600 }}>
                 {identity.id}
               </span>
               <span className={`badge badge-${identity.status === "aktif" ? "final" : identity.status === "merged" ? "draft" : "ditolak"}`}>
-                {identity.status === "merged" ? "Sudah Di-Merge" : identity.status}
+                {identity.status === "merged" ? "Sudah Di-Merge" : identity.status === "aktif" ? "Aktif" : "Nonaktif"}
               </span>
+              {identity.status === "nonaktif" && (
+                <span className="badge" style={{ background: "#FEE2E2", color: "#991B1B", border: "1px solid #FCA5A5", fontSize: 11 }}>
+                  {identity.nonaktif_tipe === "manual" ? "Nonaktif Manual" : "Nonaktif Otomatis"}
+                  {identity.nonaktif_alasan ? `: ${identity.nonaktif_alasan}` : ""}
+                  {identity.nonaktif_tanggal ? ` (${identity.nonaktif_tanggal.slice(0, 10)})` : ""}
+                </span>
+              )}
               {(identity.is_suspended === 1 || penaltyInfo?.is_suspended) && (
                 <span className="badge" style={{ background: "#DC2626", color: "#fff", fontWeight: 700, letterSpacing: "0.03em" }}>
                   DISANKSI / DITANGGUHKAN
@@ -878,15 +1052,79 @@ export default function IdentityDetailPage({ params }: { params: Promise<{ id: s
             </div>
 
             {outlets.map(o => (
-              <div key={o.id} style={{ marginBottom: 14, padding: "12px", background: "var(--bg-page)", borderRadius: 8, border: "1px solid var(--border)" }}>
+              <div
+                key={o.id}
+                style={{
+                  marginBottom: 14,
+                  padding: "12px",
+                  background: o.aktif ? "var(--bg-page)" : "#FFF7ED",
+                  borderRadius: 8,
+                  border: o.aktif ? "1px solid var(--border)" : "1px solid #FED7AA",
+                }}
+              >
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                     <span className={`badge badge-${o.tipe}`}>{o.tipe}</span>
+                    <span
+                      className="badge"
+                      style={{
+                        fontSize: 10,
+                        background: o.aktif ? "#DCFCE7" : "#FEE2E2",
+                        color: o.aktif ? "#166534" : "#991B1B",
+                        border: o.aktif ? "1px solid #BBF7D0" : "1px solid #FECDD3",
+                      }}
+                    >
+                      {o.aktif ? "Aktif" : `Nonaktif (${o.nonaktif_tipe || "manual"})`}
+                    </span>
                     <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
                       Rate: {o.tipe === "grosir" ? "200rb" : o.tipe === "retail" ? "100rb" : "50rb"}
                     </span>
                   </div>
-                  <div style={{ display: "flex", gap: 6 }}>
+                  <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                    {o.aktif ? (
+                      <button
+                        onClick={() => {
+                          setSelectedOutletForStatus(o);
+                          setDeactivateOutletReason("Lini bisnis ditutup pemilik");
+                          setOutletStatusError("");
+                          setShowDeactivateOutletModal(true);
+                        }}
+                        title="Nonaktifkan Lini Bisnis Ini"
+                        style={{
+                          background: "#FFF1F2",
+                          border: "1px solid #FECDD3",
+                          color: "#E11D48",
+                          cursor: "pointer",
+                          padding: "2px 6px",
+                          borderRadius: 4,
+                          fontSize: 11,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 3,
+                        }}
+                      >
+                        <PowerOff size={11} /> Nonaktifkan
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => handleActivateOutlet(o)}
+                        title="Aktifkan Kembali Lini Bisnis Ini"
+                        style={{
+                          background: "#F0FDF4",
+                          border: "1px solid #BBF7D0",
+                          color: "#16A34A",
+                          cursor: "pointer",
+                          padding: "2px 6px",
+                          borderRadius: 4,
+                          fontSize: 11,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 3,
+                        }}
+                      >
+                        <Power size={11} /> Aktifkan
+                      </button>
+                    )}
                     <button
                       onClick={() => openEditOutletModal(o)}
                       title="Edit Outlet"
@@ -910,6 +1148,11 @@ export default function IdentityDetailPage({ params }: { params: Promise<{ id: s
                 <div style={{ fontFamily: "monospace", fontSize: 11, color: "var(--navy-700)" }}>{o.id}</div>
                 {o.id_pos_lama && (
                   <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>POS Lama: {o.id_pos_lama}</div>
+                )}
+                {!o.aktif && o.nonaktif_alasan && (
+                  <div style={{ fontSize: 11, color: "#C2410C", marginTop: 4, background: "rgba(251, 146, 60, 0.1)", padding: "4px 8px", borderRadius: 4 }}>
+                    ⚠️ <strong>Nonaktif:</strong> {o.nonaktif_alasan}
+                  </div>
                 )}
 
                 {/* Aliases Container */}
@@ -2085,6 +2328,223 @@ export default function IdentityDetailPage({ params }: { params: Promise<{ id: s
                 >
                   {revokeSubmitting ? <div className="spinner" style={{ width: 16, height: 16 }} /> : <ShieldCheck size={16} />}
                   Cabut Sanksi &amp; Pulihkan Member
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Deaktivasi Akun Customer */}
+      {showDeactivateCustomerModal && (
+        <div className="modal-backdrop">
+          <div className="modal-card" style={{ maxWidth: 520 }}>
+            <div className="modal-header">
+              <h3 className="modal-title" style={{ display: "flex", alignItems: "center", gap: 8, color: "#BE123C" }}>
+                <PowerOff size={18} /> Nonaktifkan Akun Customer
+              </h3>
+              <button onClick={() => setShowDeactivateCustomerModal(false)} className="btn btn-ghost btn-sm">
+                <X size={16} />
+              </button>
+            </div>
+
+            <form onSubmit={handleDeactivateCustomer}>
+              <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                {customerStatusError && (
+                  <div className="alert alert-danger" style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+                    <AlertTriangle size={16} />
+                    <span>{customerStatusError}</span>
+                  </div>
+                )}
+
+                <div style={{ background: "#FFF1F2", border: "1px solid #FECDD3", borderRadius: 8, padding: 12 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#9F1239" }}>{identity.nama_pemilik}</div>
+                  <div style={{ fontSize: 11, color: "#BE123C", fontFamily: "monospace", marginTop: 2 }}>
+                    ID: {identity.id} &bull; Total Lini Bisnis: {outlets.length} outlet
+                  </div>
+                </div>
+
+                <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.5 }}>
+                  💡 <em>Poin dan kupon undian yang telah terkumpul tetap aman tersimpan selama periode program. Akun ini tidak akan muncul pada pilihan transaksi baru kecuali diaktifkan kembali.</em>
+                </div>
+
+                <div>
+                  <label className="label" style={{ fontSize: 12, fontWeight: 600 }}>Alasan Penonaktifan *</label>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
+                    {[
+                      "Toko / bisnis customer telah ditutup oleh pemilik",
+                      "Permintaan langsung dari customer / owner",
+                      "Vakum transaksi operasional",
+                    ].map((p) => (
+                      <button
+                        type="button"
+                        key={p}
+                        onClick={() => setDeactivateCustomerReason(p)}
+                        className="btn btn-ghost btn-sm"
+                        style={{
+                          textAlign: "left",
+                          justifyContent: "flex-start",
+                          fontSize: 11,
+                          padding: "6px 10px",
+                          border: deactivateCustomerReason === p ? "1px solid #F43F5E" : "1px solid var(--border)",
+                          background: deactivateCustomerReason === p ? "#FFF1F2" : "white",
+                          color: deactivateCustomerReason === p ? "#BE123C" : "var(--text-primary)",
+                        }}
+                      >
+                        {p}
+                      </button>
+                    ))}
+                  </div>
+
+                  <textarea
+                    className="input"
+                    rows={3}
+                    placeholder="Tulis alasan spesifik jika diperlukan..."
+                    value={deactivateCustomerReason}
+                    onChange={(e) => setDeactivateCustomerReason(e.target.value)}
+                    required
+                    style={{ fontSize: 12, width: "100%", resize: "vertical" }}
+                  />
+                </div>
+
+                <div style={{ background: "var(--bg-page)", border: "1px solid var(--border)", borderRadius: 8, padding: 10 }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, cursor: "pointer", fontWeight: 500 }}>
+                    <input
+                      type="checkbox"
+                      checked={cascadeOutlets}
+                      onChange={(e) => setCascadeOutlets(e.target.checked)}
+                    />
+                    <span>Nonaktifkan juga seluruh outlet / lini bisnis di bawah akun ini ({outlets.length} outlet)</span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="modal-footer" style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => setShowDeactivateCustomerModal(false)}
+                  disabled={submittingCustomerStatus}
+                  className="btn btn-outline btn-sm"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={submittingCustomerStatus || !deactivateCustomerReason.trim()}
+                  className="btn btn-sm"
+                  style={{
+                    background: "#E11D48",
+                    color: "white",
+                    border: "none",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    fontWeight: 600,
+                  }}
+                >
+                  <PowerOff size={13} />
+                  {submittingCustomerStatus ? "Memproses..." : "Konfirmasi Nonaktifkan Akun"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Deaktivasi Outlet */}
+      {showDeactivateOutletModal && selectedOutletForStatus && (
+        <div className="modal-backdrop">
+          <div className="modal-card" style={{ maxWidth: 500 }}>
+            <div className="modal-header">
+              <h3 className="modal-title" style={{ display: "flex", alignItems: "center", gap: 8, color: "#BE123C" }}>
+                <PowerOff size={18} /> Nonaktifkan Lini Bisnis
+              </h3>
+              <button onClick={() => setShowDeactivateOutletModal(false)} className="btn btn-ghost btn-sm">
+                <X size={16} />
+              </button>
+            </div>
+
+            <form onSubmit={handleDeactivateOutlet}>
+              <div className="modal-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                {outletStatusError && (
+                  <div className="alert alert-danger" style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+                    <AlertTriangle size={16} />
+                    <span>{outletStatusError}</span>
+                  </div>
+                )}
+
+                <div style={{ background: "#FFF1F2", border: "1px solid #FECDD3", borderRadius: 8, padding: 12 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#9F1239" }}>{selectedOutletForStatus.nama_outlet}</div>
+                  <div style={{ fontSize: 11, color: "#BE123C", fontFamily: "monospace", marginTop: 2 }}>
+                    ID: {selectedOutletForStatus.id} &bull; Tipe: {selectedOutletForStatus.tipe.toUpperCase()}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="label" style={{ fontSize: 12, fontWeight: 600 }}>Alasan Penonaktifan *</label>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
+                    {[
+                      "Lini bisnis ditutup pemilik",
+                      "Vakum transaksi / berhenti beroperasi sementara",
+                      "Permintaan dari pemilik",
+                    ].map((p) => (
+                      <button
+                        type="button"
+                        key={p}
+                        onClick={() => setDeactivateOutletReason(p)}
+                        className="btn btn-ghost btn-sm"
+                        style={{
+                          textAlign: "left",
+                          justifyContent: "flex-start",
+                          fontSize: 11,
+                          padding: "6px 10px",
+                          border: deactivateOutletReason === p ? "1px solid #F43F5E" : "1px solid var(--border)",
+                          background: deactivateOutletReason === p ? "#FFF1F2" : "white",
+                          color: deactivateOutletReason === p ? "#BE123C" : "var(--text-primary)",
+                        }}
+                      >
+                        {p}
+                      </button>
+                    ))}
+                  </div>
+
+                  <textarea
+                    className="input"
+                    rows={3}
+                    placeholder="Tulis alasan spesifik jika diperlukan..."
+                    value={deactivateOutletReason}
+                    onChange={(e) => setDeactivateOutletReason(e.target.value)}
+                    required
+                    style={{ fontSize: 12, width: "100%", resize: "vertical" }}
+                  />
+                </div>
+              </div>
+
+              <div className="modal-footer" style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => setShowDeactivateOutletModal(false)}
+                  disabled={submittingOutletStatus}
+                  className="btn btn-outline btn-sm"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={submittingOutletStatus || !deactivateOutletReason.trim()}
+                  className="btn btn-sm"
+                  style={{
+                    background: "#E11D48",
+                    color: "white",
+                    border: "none",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    fontWeight: 600,
+                  }}
+                >
+                  <PowerOff size={13} />
+                  {submittingOutletStatus ? "Memproses..." : "Konfirmasi Nonaktifkan Lini Bisnis"}
                 </button>
               </div>
             </form>

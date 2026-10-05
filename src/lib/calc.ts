@@ -300,10 +300,27 @@ export function buildStatementData(identityId: string, bulan: string): Statement
     }
   }
 
-  // Outlet-outlet aktif
+  // Outlet-outlet aktif ATAU outlet nonaktif yang memiliki transaksi pada bulan ini
   const outletsDb = db
-    .prepare(`SELECT o.id, o.nama_outlet, o.tipe FROM outlets o WHERE o.identity_id = ? AND o.aktif = 1`)
-    .all(identityId) as { id: string; nama_outlet: string; tipe: OutletTipe }[];
+    .prepare(`
+      SELECT o.id, o.nama_outlet, o.tipe
+      FROM outlets o
+      WHERE o.identity_id = ?
+        AND (
+          o.aktif = 1
+          OR EXISTS (
+            SELECT 1 FROM invoices i
+            WHERE i.outlet_id = o.id
+              AND i.tanggal >= ? AND i.tanggal <= ?
+          )
+          OR EXISTS (
+            SELECT 1 FROM waste_purchases wp
+            WHERE wp.outlet_id = o.id
+              AND wp.tanggal >= ? AND wp.tanggal <= ?
+          )
+        )
+    `)
+    .all(identityId, bulanStart, bulanEnd, bulanStart, bulanEnd) as { id: string; nama_outlet: string; tipe: OutletTipe }[];
 
   const nilaiKupon = getNilaiKupon();
 

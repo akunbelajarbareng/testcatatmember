@@ -118,6 +118,32 @@ Komponen cetak presisi pada [`StatementDocument.tsx`](file:///c:/01.%20Chandra/0
   - Sistem memeriksa riwayat approval lintas seluruh status (`menunggu`, `disetujui`, `ditolak`, `diabaikan`).
   - Import berkala data master customer bulanan tidak akan menambahkan antrean baru untuk entitas yang sudah pernah ditinjau atau telah terpetakan di CRM.
 
+### L. Modul Deaktivasi & Aktivasi Akun / Lini Bisnis (Manual & Otomatis)
+- **Konsep Hirarki Akun Utama (Identity) & Lini Bisnis (Outlet)**:
+  - Pelanggan dapat dinonaktifkan di tingkat Akun Utama (`identities`) maupun di tingkat masing-masing Lini Bisnis / Cabang Outlet fisik (`outlets`).
+  - **Deaktivasi Akun Utama**: Otomatis menonaktifkan seluruh lini bisnis/outlet aktif di bawahnya (*cascading deactivation*).
+  - **Deaktivasi Outlet Mandiri**: Menandai outlet nonaktif. Jika seluruh outlet milik suatu Akun Utama telah nonaktif, status Akun Utama otomatis diperbarui menjadi nonaktif (`status = 'nonaktif'`).
+  - **Aktivasi Kembali**: Mengaktifkan salah satu outlet fisik otomatis mengembalikan status Akun Utama menjadi aktif kembali.
+- **Dua Metode Penonaktifan**:
+  1. **Manual (Toko Tutup / Bangkrut / Permintaan Owner)**:
+     - Dilakukan langsung oleh Manajemen/Owner via UI Detail Pelanggan (`/identities/[id]`) atau Master Outlet (`/outlets`).
+     - Menyimpan alasan penonaktifan (contoh: "Toko tutup permanen"), tanggal eksekusi, dan nama eksekutor (`nonaktif_oleh`).
+     - Status ditandai `nonaktif_tipe = 'manual'`.
+  2. **Otomatis (Berdasarkan Inaktivitas / Periode Dormant)**:
+     - Dilakukan oleh Engine Audit Inaktivitas (`auditInactivity`) berdasar batas bulan tanpa transaksi belanja kasir POS (default: 3 bulan, dapat disesuaikan di Menu Pengaturan).
+     - Status ditandai `nonaktif_tipe = 'otomatis'`.
+- **Pengaturan Ambang Batas Inaktivitas (`/settings`)**:
+  - Kolom input dinamis `Batas Inaktivitas Pelanggan (Bulan)` di menu Pengaturan Rules (default 3 bulan).
+  - Live status badge yang menampilkan jumlah kandidat outlet yang terdeteksi inaktif.
+  - Tombol **Audit Inaktivitas Sekarang** yang menampilkan dialog konfirmasi jumlah outlet terdampak sebelum penonaktifan massal dieksekusi.
+- **Filter Status Master Outlet (`/outlets`)**:
+  - Tab penyaring cepat: **Semua**, **Aktif**, dan **Nonaktif**.
+  - Badge status visual informatif:
+    - Hijau: Aktif.
+    - Abu-abu Gelap: Nonaktif (Manual / Toko Tutup).
+    - Amber / Kuning: Inaktif (Otomatis / Dormant).
+  - Modal aksi cepat untuk menonaktifkan atau mengaktifkan outlet langsung dari tabel master tanpa harus berpindah halaman.
+
 ---
 
 ## 🔑 3. POIN-POIN PENTING & LOGIKA BISNIS KRUSIAL
@@ -157,6 +183,22 @@ Komponen cetak presisi pada [`StatementDocument.tsx`](file:///c:/01.%20Chandra/0
 7. **Fitur Pencarian & Paginasi Antrean Approval**:
    - Menu Antrean Approval (`/approvals`) dilengkapi bilah pencarian cerdas untuk memfilter antrean secara instan berdasarkan: kode (102 / 131), nama customer / nama POS, ID approval, nama file Excel asal, maupun alasan anomali.
    - Dilengkapi sistem paginasi 20 antrean per halaman (`Pagination`) dengan indikator jumlah item yang cocok serta tombol reset cepat (✕) untuk memudahkan navigasi saat terdapat ratusan antrean.
+
+8. **Kebijakan Operasional Penutupan Toko, Inaktivitas & Pembukaan Kembali (Opsi 1)**:
+   - **Perlindungan Hak Poin & Kupon ("Simpan Selama Masa Periode")**:
+     - Penonaktifan akun atau outlet (baik manual maupun otomatis) **TIDAK MENGHAPUS** omzet, riwayat transaksi faktur, saldo poin akumulasi, ataupun kupon undian fisik yang telah diperoleh pelanggan selama periode program berlangsung.
+     - Poin dan kupon tetap tersimpan utuh di database dan tetap dicantumkan dalam riwayat pembukuan serta ringkasan lembar statement tahunan.
+   - **Mekanisme Pembukaan Kembali Akun (Opsi 1)**:
+     - **Akun Dinonaktifkan Otomatis (Inaktif > Batas Periode Bulan)**:
+       - Jika pelanggan tersebut berbelanja kembali dan tercatat pada import faktur penjualan POS di masa depan, sistem akan **secara otomatis membuka kembali status akun dan outletnya** (`aktif = 1`, `status = 'aktif'`), mencatat log audit sistem, dan langsung memproses perhitungan poin serta kupon secara normal tanpa perlu persetujuan manual.
+     - **Akun Dinonaktifkan Manual (Toko Tutup / Kasus Khusus Owner)**:
+       - Jika muncul faktur belanja baru untuk outlet yang telah ditutup secara manual oleh Owner, sistem **TIDAK AKAN langsung membuka akun secara diam-diam**.
+       - Transaksi faktur tersebut dialihkan ke **Antrean Approval (`/approvals`)** dengan jenis `transaksi_outlet_nonaktif` untuk ditinjau oleh Owner/Manajemen.
+       - Faktur disimpan sementara di database dengan `outlet_id = NULL, poin = 0, kupon = 0` sehingga omzet belanja riil tidak hilang, namun tidak langsung mencetak poin sebelum disetujui.
+       - Owner memiliki opsi tindakan di halaman `/approvals`:
+         1. **Buka Kembali & Tautkan Faktur**: Mengaktifkan kembali outlet & akun utama, lalu mengaitkan faktur dan menghitung poin/kupon secara otomatis.
+         2. **Hanya Tautkan Faktur**: Mengaitkan faktur ke outlet tanpa mengubah status nonaktif outlet (misal hanya penyelesaian nota lama).
+         3. **Abaikan / Tolak**: Menolak penautan jika faktur adalah anomali / salah ketik nama oleh kasir POS.
 
 ---
 
@@ -215,3 +257,4 @@ Jika terjadi insiden salah hapus atau kegagalan data di VPS:
 ---
 
 *Dokumen ini disusun sebagai panduan resmi arsitektur, fitur, dan tata kelola sistem Oriental CRM Customer Statement.*
+
