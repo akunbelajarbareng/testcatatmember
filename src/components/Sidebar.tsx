@@ -16,6 +16,7 @@ import {
   LogOut,
   ShieldCheck,
   User,
+  Droplets,
 } from "lucide-react";
 import Image from "next/image";
 
@@ -24,6 +25,7 @@ const nav = [
   { href: "/identities", icon: Users, label: "Daftar Member" },
   { href: "/outlets", icon: Store, label: "Outlet" },
   { href: "/coupons", icon: Ticket, label: "Kupon Undian" },
+  { href: "/waste-purchases", icon: Droplets, label: "Waste Purchasing" },
   { href: "/statements", icon: FileText, label: "Statement" },
   { href: "/import", icon: Upload, label: "Import Data" },
   { href: "/aliases", icon: GitMerge, label: "Pemetaan Alias" },

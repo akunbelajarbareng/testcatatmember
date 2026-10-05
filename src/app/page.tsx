@@ -4,7 +4,7 @@ import Link from "next/link";
 import {
   Users, Store, GitMerge, FileText, TrendingUp, AlertTriangle,
   RefreshCw, ChevronRight, Award, Ticket, Banknote, Calendar,
-  Filter, ArrowRight, ShieldCheck, Download
+  Filter, ArrowRight, ShieldCheck, Download, Droplets, Scale
 } from "lucide-react";
 
 interface LiniBisnisStat {
@@ -50,6 +50,12 @@ interface DashboardData {
     total_kupon: number;
     total_transaksi: number;
     total_invoices: number;
+  };
+  wasteTotals?: {
+    total_waste_trx: number;
+    total_waste_kg: number;
+    total_waste_rupiah: number;
+    total_waste_poin: number;
   };
   byLiniBisnis: LiniBisnisStat[];
   topMembers: TopMember[];
@@ -278,28 +284,49 @@ export default function DashboardPage() {
         </Link>
       )}
 
-      {/* Primary KPI Stats Cards (Dynamically Filtered) */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16, marginBottom: 20 }}>
-        {/* Total Transaksi */}
+      {/* Primary KPI Stats Cards (Dynamically Filtered: Penjualan vs Pembelian Waste) */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16, marginBottom: 20 }}>
+        {/* 1. Total Transaksi Penjualan (Sales POS) */}
         <div className="card card-hover" style={{ padding: "20px 22px" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
             <div style={{ width: 42, height: 42, borderRadius: 10, background: "var(--navy-100)", display: "flex", alignItems: "center", justifyContent: "center" }}>
               <Banknote size={22} style={{ color: "var(--navy-600)" }} />
             </div>
             <span className="badge badge-retail" style={{ fontSize: 10 }}>
-              {data?.totals.total_invoices ?? 0} Invoices
+              {data?.totals.total_invoices ?? 0} Invoices POS
             </span>
           </div>
           <div className="stat-value" style={{ color: "var(--navy-800)" }}>
             {loading ? "—" : fmtRp(data?.totals.total_transaksi ?? 0)}
           </div>
-          <div className="stat-label">Total Transaksi ({data?.periodInfo.label})</div>
+          <div className="stat-label">Total Transaksi Penjualan</div>
           <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6 }}>
-            Nominal bruto: Rp {fmt(data?.totals.total_transaksi ?? 0)}
+            Omzet Belanja Member ({data?.periodInfo.label})
           </div>
         </div>
 
-        {/* Total Poin */}
+        {/* 2. Total Pembelian Waste (UCO - Minyak Jelantah) */}
+        <Link href="/waste-purchases" style={{ textDecoration: "none", color: "inherit" }}>
+          <div className="card card-hover" style={{ padding: "20px 22px", height: "100%", borderLeft: "4px solid #10b981" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+              <div style={{ width: 42, height: 42, borderRadius: 10, background: "rgba(16, 185, 129, 0.15)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <Droplets size={22} style={{ color: "#10b981" }} />
+              </div>
+              <span className="badge badge-success" style={{ fontSize: 10, background: "rgba(16, 185, 129, 0.15)", color: "#065f46" }}>
+                {data?.wasteTotals?.total_waste_trx ?? 0} Trx UCO
+              </span>
+            </div>
+            <div className="stat-value" style={{ color: "#065f46" }}>
+              {loading ? "—" : fmtRp(data?.wasteTotals?.total_waste_rupiah ?? 0)}
+            </div>
+            <div className="stat-label">Total Pembelian Waste (UCO)</div>
+            <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6 }}>
+              Volume: {(data?.wasteTotals?.total_waste_kg ?? 0).toLocaleString("id-ID", { minimumFractionDigits: 1, maximumFractionDigits: 2 })} Kg
+            </div>
+          </div>
+        </Link>
+
+        {/* 3. Total Poin */}
         <div className="card card-hover" style={{ padding: "20px 22px" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
             <div style={{ width: 42, height: 42, borderRadius: 10, background: "var(--gold-100)", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -310,13 +337,13 @@ export default function DashboardPage() {
           <div className="stat-value" style={{ color: "var(--navy-800)" }}>
             {loading ? "—" : fmt(data?.totals.total_poin ?? 0)}
           </div>
-          <div className="stat-label">Poin Dihitung ({data?.periodInfo.label})</div>
+          <div className="stat-label">Poin Belanja POS</div>
           <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6 }}>
-            Retail (100k) · UKM (50k) · Grosir (200k)
+            +{fmt(data?.wasteTotals?.total_waste_poin ?? 0)} Pt tambahan dari Waste
           </div>
         </div>
 
-        {/* Total Kupon */}
+        {/* 4. Total Kupon */}
         <div className="card card-hover" style={{ padding: "20px 22px" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
             <div style={{ width: 42, height: 42, borderRadius: 10, background: "var(--success-100)", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -327,9 +354,9 @@ export default function DashboardPage() {
           <div className="stat-value" style={{ color: "var(--navy-800)" }}>
             {loading ? "—" : fmt(data?.totals.total_kupon ?? 0)}
           </div>
-          <div className="stat-label">Kupon Undian ({data?.periodInfo.label})</div>
+          <div className="stat-label">Kupon Belanja Fisik</div>
           <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6 }}>
-            Setiap kelipatan Rp 150.000
+            Setiap kelipatan Rp 150.000 belanja
           </div>
         </div>
       </div>

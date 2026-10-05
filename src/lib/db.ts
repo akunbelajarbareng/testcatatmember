@@ -277,6 +277,41 @@ function initSchema(db: Database.Database) {
     );
     CREATE INDEX IF NOT EXISTS idx_penalties_identity ON member_penalties(identity_id);
     CREATE INDEX IF NOT EXISTS idx_penalties_status   ON member_penalties(status);
+
+    /* -----------------------------------------------------------------------
+       waste_purchases — transaksi pembelian limbah (UCO) per outlet
+    ----------------------------------------------------------------------- */
+    CREATE TABLE IF NOT EXISTS waste_purchases (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      outlet_id     TEXT    NOT NULL REFERENCES outlets(id) ON UPDATE CASCADE ON DELETE CASCADE,
+      identity_id   TEXT    NOT NULL REFERENCES identities(id) ON UPDATE CASCADE ON DELETE CASCADE,
+      tanggal       TEXT    NOT NULL,               -- ISO date YYYY-MM-DD
+      jenis_waste   TEXT    NOT NULL DEFAULT 'UCO', -- UCO | dsb
+      berat_kg      REAL    NOT NULL,
+      harga_per_kg  REAL    NOT NULL,
+      total_rupiah  REAL    NOT NULL,
+      poin          INTEGER NOT NULL DEFAULT 0,     -- Rp 10.000 = 1 Poin (0 kupon)
+      no_timbangan  TEXT,
+      catatan       TEXT,
+      petugas       TEXT    NOT NULL,
+      created_at    TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_waste_outlet ON waste_purchases(outlet_id);
+    CREATE INDEX IF NOT EXISTS idx_waste_identity ON waste_purchases(identity_id);
+    CREATE INDEX IF NOT EXISTS idx_waste_tanggal ON waste_purchases(tanggal);
+  `);
+
+  // Inisialisasi default rules baru jika belum ada
+  db.exec(`
+    INSERT OR IGNORE INTO rules_config(kunci, nilai) VALUES
+      ('rate_retail',  100000),
+      ('rate_ukm',      50000),
+      ('rate_grosir',  200000),
+      ('nilai_kupon',  150000),
+      ('harga_uco_per_kg', 8000),
+      ('rate_waste_poin', 10000),
+      ('saving_parkir_per_trx', 2000),
+      ('saving_kurir_per_trx', 15000);
   `);
 
   // Migrasi kolom whatsapp pada identities jika belum ada

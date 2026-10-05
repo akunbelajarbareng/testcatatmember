@@ -81,6 +81,30 @@ Komponen cetak presisi pada [`StatementDocument.tsx`](file:///c:/01.%20Chandra/0
 - **Rotasi Otomatis 30 Hari**: File cadangan yang berusia lebih dari 30 hari otomatis dibersihkan agar kapasitas disk tidak penuh.
 - **One-Click Download**: Fasilitas pengunduhan file `.db` langsung dari bilah antarmuka web (Menu Pengaturan).
 
+### I. Modul Pencatatan Pembelian Limbah (Waste Purchasing — UCO)
+- **Pencatatan per Outlet Fisik**: Setiap transaksi pembelian minyak jelantah dicatat spesifik per outlet member (`outlet_id`), yang secara otomatis terhubung ke akun One Identity pemiliknya.
+- **Konversi Reward Point**:
+  - Setiap **Rp 10.000** nilai pembelian waste menghasilkan **1 Oriental Point**.
+  - Transaksi waste **TIDAK menghasilkan kupon undian fisik** (kupon = 0).
+- **Harga Acuan Dinamis**: Standar harga pembelian minyak jelantah per Kg dapat dikonfigurasi melalui Menu **Pengaturan** (`harga_uco_per_kg`), namun kasir/petugas tetap dapat menyesuaikan harga jika ada kesepakatan harga khusus per transaksi.
+- **Pemisahan Tegas di Dashboard**:
+  - Metrik omzet penjualan ditampilkan terpisah sebagai **"Total Transaksi Penjualan"**.
+  - Metrik pembelian limbah ditampilkan sebagai **"Total Pembelian Waste (UCO)"** lengkap dengan volume Kg, tanpa mencampur omzet penjualan belanja kasir.
+- **Sub-Menu Input Cepat (`/waste-purchases`)**: Form pencatatan lengkap dengan pilihan outlet, tanggal, berat (kg), harga/kg, kalkulasi otomatis total rupiah & estimasi poin, nomor bukti timbangan, catatan drum/kualitas, serta nama petugas.
+
+### J. Modul Nilai Penghematan Belanja Customer (Customer Savings)
+- **Tujuan**: Memberikan reminder psikologis dan transparansi manfaat loyalitas berbelanja di Oriental pada Lembar Statement Customer (Halaman 1).
+- **Formula Perhitungan**:
+  $$\text{Total Penghematan} = \text{Jumlah Transaksi (Nota/Invoice) Bulan Berjalan} \times (\text{Estimasi Parkir} + \text{Estimasi Subsidi Kurir})$$
+- **Parameter Konfigurasi Dinamis**:
+  - `saving_parkir_per_trx` : Default Rp 2.000 / transaksi (dapat diubah di Menu Pengaturan).
+  - `saving_kurir_per_trx`  : Default Rp 15.000 / transaksi (dapat diubah di Menu Pengaturan).
+- **Penyajian pada Statement Customer**:
+  - **Halaman 1 (Customer Facing)**: Menampilkan 2 kartu sorotan manfaat finansial berdampingan:
+    1. *Nilai Penghematan Belanja Bulan Ini*: Total transaksi nota, rincian hemat parkir, rincian subsidi kurir, dan total rupiah yang dihemat.
+    2. *Pendapatan Tambahan Waste (UCO)*: Total Kg minyak jelantah disetor, dana tunai yang diterima, serta bonus poin Oriental.
+  - **Halaman 2 (Internal Audit)**: Dilengkapi tabel *Pencatatan Pembelian Limbah (Waste UCO)* per outlet untuk verifikasi pembukuan kas keluar.
+
 ---
 
 ## 🔑 3. POIN-POIN PENTING & LOGIKA BISNIS KRUSIAL
@@ -100,6 +124,26 @@ Komponen cetak presisi pada [`StatementDocument.tsx`](file:///c:/01.%20Chandra/0
 4. **Standar Node.js di Cloud VPS**:
    - Server VPS menggunakan **Node.js LTS v22.23.3** via NVM.
    - Kompilasi produksi Next.js 16 (`npm run build`) wajib menggunakan path binary Node.js v22 ini agar worker Turbopack tidak mengalami benturan memori (*SIGSEGV*).
+
+5. **Integrasi Poin Waste Purchasing pada Kalkulasi Statement & Sanksi Void**:
+   - **Akun Normal / Aktif**:
+     - $\text{Total Point Bulan Berjalan} = \text{Point Belanja} + \text{Point Waste Purchasing}$
+     - $\text{Total Point Yang Dimiliki} = \text{Kumulatif Belanja} + \text{Kumulatif Waste Purchasing}$
+   - **Akun Status Suspend / Evaluasi Khusus (Hasil Tetap VOID)**:
+     - Potensi Poin Bulan Berjalan mencakup: $\text{Potensi Belanja} + \text{Potensi Waste Purchasing}$ (contoh: 668 + 28 = **696 Point**).
+     - **Nilai VOID Sanksi = 696 Point** (Semua hak poin belanja dan poin limbah bulan berjalan dibatalkan/divoid).
+     - **Poin Diakui Bulan Berjalan = 0 Point** (hasil tetap void sesuai ketentuan sanksi).
+     - Pada Statement Halaman 1: Card 1 tertulis `0 Oriental Point (DEVALUASI/VOID: -696 POINT)`. Box Waste tertulis `0 Point [VOID: +28 Pt]`.
+     - Pada Statement Halaman 2: Card 1 tertulis `(Potensi: 696 − Penalti: 696)`. Tabel Histori 13 Bulan baris bulan terkait menampilkan `0 [VOID 696]`. Tabel 3 Pembelian Limbah mencantumkan status `0 [VOID: +28]`. Berita Acara Audit menegaskan void sebesar 696 Poin.
+
+6. **Mekanisme Deduplikasi Antrean Approval pada Re-Import Customer**:
+   - Import berkala data master customer (misal tiap awal bulan) tidak akan menduplikasi antrean persetujuan (`approvals`).
+   - Sistem memeriksa riwayat approval pada **seluruh status** (`menunggu`, `disetujui`, `ditolak`, `diabaikan`). Keputusan yang telah ditetapkan Owner di masa lalu tidak akan dimunculkan kembali ke antrean menunggu.
+   - Untuk kode lama POS (131), sistem secara cerdas memeriksa apakah kode tersebut sudah terdaftar di tabel `outlets` atau `pos_aliases`. Kode yang sudah terpetakan di CRM otomatis dilewati (skip).
+
+7. **Fitur Pencarian & Paginasi Antrean Approval**:
+   - Menu Antrean Approval (`/approvals`) dilengkapi bilah pencarian cerdas untuk memfilter antrean secara instan berdasarkan: kode (102 / 131), nama customer / nama POS, ID approval, nama file Excel asal, maupun alasan anomali.
+   - Dilengkapi sistem paginasi 20 antrean per halaman (`Pagination`) dengan indikator jumlah item yang cocok serta tombol reset cepat (✕) untuk memudahkan navigasi saat terdapat ratusan antrean.
 
 ---
 

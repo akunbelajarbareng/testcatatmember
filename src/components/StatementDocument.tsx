@@ -50,6 +50,7 @@ export default function StatementDocument({
     bulan_label,
     bulan_transaksi,
     bulan_poin,
+    bulan_belanja_poin,
     bulan_kupon,
     kumulatif_poin,
     kumulatif_kupon,
@@ -64,6 +65,19 @@ export default function StatementDocument({
     sebelumnya_kumulatif_kupon,
     total_devaluasi_kumulatif_poin,
     total_devaluasi_kumulatif_kupon,
+    waste_bulan_kg = 0,
+    waste_bulan_rupiah = 0,
+    waste_bulan_poin = 0,
+    waste_kumulatif_kg = 0,
+    waste_kumulatif_rupiah = 0,
+    waste_kumulatif_poin = 0,
+    outlets_waste = [],
+    hemat_trx_count = 0,
+    saving_parkir_per_trx = 2000,
+    saving_kurir_per_trx = 15000,
+    total_hemat_parkir = 0,
+    total_hemat_kurir = 0,
+    total_nilai_penghematan = 0,
   } = data;
 
   const isDevaluedAccount = Boolean(
@@ -209,9 +223,14 @@ export default function StatementDocument({
                       <span className="text-xl font-black text-slate-950">{fmt(bulan_poin)}</span>
                       <span className="text-[11px] font-semibold text-slate-600">Oriental Point</span>
                     </div>
+                    {waste_bulan_poin > 0 && !hasMonthPointDevaluasi && (
+                      <div className="text-[9px] font-bold text-emerald-700 mt-0.5 leading-none">
+                        (Belanja: {fmt(bulan_belanja_poin ?? (bulan_poin - waste_bulan_poin))} Pt · UCO: +{fmt(waste_bulan_poin)} Pt)
+                      </div>
+                    )}
                     {hasMonthPointDevaluasi && (
                       <div className="text-[9.5px] font-bold text-red-600 mt-0.5 leading-none">
-                        (DEVALUASI POINT: -{fmt(devaluasi_bulan_poin || 0)} POINT)
+                        (DEVALUASI/VOID: -{fmt(devaluasi_bulan_poin || 0)} POINT)
                       </div>
                     )}
                   </div>
@@ -402,10 +421,75 @@ export default function StatementDocument({
               </table>
             </div>
 
+            {/* Highlight 2 Manfaat Finansial Member (Penghematan Biaya & Pendapatan Waste) */}
+            <div className="grid grid-cols-2 gap-3 mb-3 text-[11px]">
+              {/* Box 1: Nilai Penghematan Belanja */}
+              <div className="border border-blue-200 bg-blue-50/70 rounded p-2.5 flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-blue-900 flex items-center gap-1">
+                      <span>🛡️ NILAI PENGHEMATAN BELANJA BULAN INI</span>
+                    </span>
+                    <span className="text-[9.5px] font-bold text-blue-700 bg-white border border-blue-200 px-1.5 py-0.2 rounded font-mono">
+                      {hemat_trx_count}x Transaksi
+                    </span>
+                  </div>
+                  <div className="space-y-0.5 text-[10px] text-slate-700">
+                    <div className="flex justify-between">
+                      <span>• Bebas Biaya Parkir ({hemat_trx_count} × Rp {fmt(saving_parkir_per_trx)}):</span>
+                      <span className="font-mono font-bold text-slate-900">{fmtRp(total_hemat_parkir)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>• Estimasi Subsidi Ongkir ({hemat_trx_count} × Rp {fmt(saving_kurir_per_trx)}):</span>
+                      <span className="font-mono font-bold text-slate-900">{fmtRp(total_hemat_kurir)}</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-1.5 pt-1.5 border-t border-blue-200 flex items-center justify-between text-[11px]">
+                  <span className="font-bold text-blue-950 uppercase">Total Penghematan Anda:</span>
+                  <span className="font-mono font-black text-blue-900 text-xs">{fmtRp(total_nilai_penghematan)}</span>
+                </div>
+              </div>
+
+              {/* Box 2: Pendapatan Tambahan Waste (UCO) */}
+              <div className="border border-emerald-200 bg-emerald-50/70 rounded p-2.5 flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-emerald-900 flex items-center gap-1">
+                      <span>🌱 PENDAPATAN TAMBAHAN DARI WASTE (UCO)</span>
+                    </span>
+                    <span className="text-[9.5px] font-bold text-emerald-700 bg-white border border-emerald-200 px-1.5 py-0.2 rounded font-mono">
+                      {waste_bulan_kg > 0 ? `${waste_bulan_kg.toLocaleString("id-ID", { minimumFractionDigits: 1, maximumFractionDigits: 2 })} Kg` : "0 Kg"}
+                    </span>
+                  </div>
+                  <div className="space-y-0.5 text-[10px] text-slate-700">
+                    <div className="flex justify-between">
+                      <span>• Tambahan Dana Tunai (UCO):</span>
+                      <span className="font-mono font-bold text-emerald-900">{fmtRp(waste_bulan_rupiah)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>• Tambahan Oriental Point (+Pt):</span>
+                      <span className="font-mono font-bold text-blue-800">
+                        {isDevaluedAccount && (data.gross_waste_bulan_poin || 0) > 0 ? (
+                          <span className="text-red-600 font-bold">0 Point [VOID: +{fmt(data.gross_waste_bulan_poin!)} Pt]</span>
+                        ) : (
+                          `+${fmt(waste_bulan_poin)} Point (0 Kupon)`
+                        )}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-1.5 pt-1.5 border-t border-emerald-200 flex items-center justify-between text-[11px]">
+                  <span className="font-bold text-emerald-950 uppercase">Total Pendapatan Limbah:</span>
+                  <span className="font-mono font-black text-emerald-800 text-xs">{fmtRp(waste_bulan_rupiah)}</span>
+                </div>
+              </div>
+            </div>
+
             {/* Signature Block (Halaman 1) */}
-            <div className="flex justify-end mt-6 pr-6">
+            <div className="flex justify-end mt-4 pr-6">
               <div className="w-56 text-center text-[12px]">
-                <p className="font-semibold text-slate-700 mb-14">Diterima oleh,</p>
+                <p className="font-semibold text-slate-700 mb-10">Diterima oleh,</p>
                 <div className="border-b border-slate-800 w-full mb-1"></div>
                 <p className="font-bold uppercase text-slate-900">{nama_pemilik || "Customer"}</p>
               </div>
@@ -786,6 +870,52 @@ export default function StatementDocument({
                 </tbody>
               </table>
             </div>
+
+            {/* Table 3: Rekapitulasi Pembelian Limbah UCO (Internal Audit) */}
+            {outlets_waste && outlets_waste.length > 0 && (
+              <div className="mb-3">
+                <div className="bg-emerald-900 text-white text-[10.5px] font-black uppercase tracking-wider px-3 py-1 rounded-t flex items-center justify-between">
+                  <span>Pencatatan Pembelian Limbah (Waste UCO) Periode Ini (Internal Audit)</span>
+                  <span className="text-[9px] font-bold text-emerald-200">
+                    Total: {waste_bulan_kg.toLocaleString("id-ID", { minimumFractionDigits: 1, maximumFractionDigits: 2 })} Kg ({fmtRp(waste_bulan_rupiah)})
+                  </span>
+                </div>
+                <table className="w-full text-[10px] border border-emerald-300 border-t-0 border-collapse">
+                  <thead>
+                    <tr className="bg-emerald-50 text-emerald-950 border-b border-emerald-200 font-bold">
+                      <th className="py-1 px-2 w-8 text-center border-r border-emerald-200">No</th>
+                      <th className="py-1 px-2.5 w-36 border-r border-emerald-200 text-left">ID Outlet</th>
+                      <th className="py-1 px-2.5 border-r border-emerald-200 text-left">Nama Outlet</th>
+                      <th className="py-1 px-2.5 text-right w-28 border-r border-emerald-200">Berat (Kg)</th>
+                      <th className="py-1 px-2.5 text-right w-36 border-r border-emerald-200">Total Beli (Rp)</th>
+                      <th className="py-1 px-2.5 text-right w-28">Reward Poin</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {outlets_waste.map((ow, idx) => (
+                      <tr key={ow.outlet_id} className={`border-b border-emerald-100 ${idx % 2 === 1 ? "bg-emerald-50/30" : "bg-white"}`}>
+                        <td className="py-1 px-2 text-center font-mono border-r border-emerald-100">{idx + 1}</td>
+                        <td className="py-1 px-2.5 font-mono border-r border-emerald-100">{ow.outlet_id}</td>
+                        <td className="py-1 px-2.5 font-medium border-r border-emerald-100 uppercase">{ow.nama_outlet}</td>
+                        <td className="py-1 px-2.5 text-right font-mono border-r border-emerald-100">
+                          {ow.berat_kg.toLocaleString("id-ID", { minimumFractionDigits: 1, maximumFractionDigits: 2 })} Kg
+                        </td>
+                        <td className="py-1 px-2.5 text-right font-mono font-bold text-emerald-900 border-r border-emerald-100">
+                          {fmtRp(ow.total_rupiah)}
+                        </td>
+                        <td className="py-1 px-2.5 text-right font-mono font-semibold text-blue-900">
+                          {isDevaluedAccount ? (
+                            <span className="text-red-600 font-bold">0 [VOID: +{fmt(ow.poin)}]</span>
+                          ) : (
+                            `+${fmt(ow.poin)} Point`
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
             {/* Klausul Legal Berita Acara Audit & Pengesahan Saldo */}
             {isDevaluedAccount && (

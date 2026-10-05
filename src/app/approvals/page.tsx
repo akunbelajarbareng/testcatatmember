@@ -1,7 +1,18 @@
 "use client";
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
-import { CheckCircle2, XCircle, MinusCircle, RefreshCw, GitMerge, AlertTriangle, Plus } from "lucide-react";
+import {
+  CheckCircle2,
+  XCircle,
+  MinusCircle,
+  RefreshCw,
+  GitMerge,
+  AlertTriangle,
+  Plus,
+  Search,
+  X,
+} from "lucide-react";
+import Pagination from "@/components/Pagination";
 
 interface Approval {
   id: number;
@@ -12,7 +23,10 @@ interface Approval {
   filename?: string;
   bulan?: string;
 }
-interface Count { jenis: string; jumlah: number; }
+interface Count {
+  jenis: string;
+  jumlah: number;
+}
 
 const JENIS_LABEL: Record<string, string> = {
   nama_belum_dipetakan: "Nama Belum Dipetakan",
@@ -28,6 +42,9 @@ export default function ApprovalsPage() {
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [counts, setCounts] = useState<Count[]>([]);
   const [filterJenis, setFilterJenis] = useState("");
+  const [q, setQ] = useState("");
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [outlets, setOutlets] = useState<{ id: string; nama_outlet: string; tipe: string; nama_pemilik: string }[]>([]);
   const [selectedOutlet, setSelectedOutlet] = useState<Record<number, string>>({});
@@ -35,20 +52,38 @@ export default function ApprovalsPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const params = filterJenis ? `?jenis=${filterJenis}` : "";
+    const params = new URLSearchParams();
+    if (filterJenis) params.set("jenis", filterJenis);
+    if (q.trim()) params.set("q", q.trim());
+    params.set("page", String(page));
+    params.set("limit", "20");
+
     const [aRes, oRes] = await Promise.all([
-      fetch(`/api/approvals${params}`),
+      fetch(`/api/approvals?${params.toString()}`),
       fetch("/api/outlets"),
     ]);
     const aJson = await aRes.json();
     const oJson = await oRes.json();
     setApprovals(aJson.approvals || []);
     setCounts(aJson.counts || []);
+    setTotal(aJson.total || 0);
     setOutlets(oJson.outlets || []);
     setLoading(false);
-  }, [filterJenis]);
+  }, [filterJenis, q, page]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const handleFilterJenis = (jenis: string) => {
+    setFilterJenis(jenis);
+    setPage(1);
+  };
+
+  const handleSearchChange = (val: string) => {
+    setQ(val);
+    setPage(1);
+  };
 
   const resolve = async (id: number, keputusan: string, outletId?: string) => {
     setResolving(id);
@@ -62,34 +97,85 @@ export default function ApprovalsPage() {
   };
 
   const totalPending = counts.reduce((s, c) => s + c.jumlah, 0);
+  const totalPages = Math.ceil(total / 20);
 
   return (
-    <div className="fade-in" style={{ padding: "28px 32px", maxWidth: 1000 }}>
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 24 }}>
+    <div className="fade-in" style={{ padding: "28px 32px", maxWidth: 1040, width: "100%" }}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 20, gap: 16, flexWrap: "wrap" }}>
         <div>
           <h1 className="page-title">Antrean Approval</h1>
           <p className="page-subtitle">Tinjau dan selesaikan item yang memerlukan keputusan Owner</p>
         </div>
-        <button onClick={load} className="btn btn-outline btn-sm" disabled={loading}>
+        <button onClick={load} className="btn btn-outline btn-sm" disabled={loading} title="Segarkan Data">
           <RefreshCw size={14} style={loading ? { animation: "spin .7s linear infinite" } : {}} /> Refresh
         </button>
       </div>
 
-      {/* Count badges */}
+      {/* Search & Filter Bar */}
+      <div style={{ display: "flex", gap: 12, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ position: "relative", flex: "1 1 340px", maxWidth: 480 }}>
+          <Search
+            size={15}
+            style={{
+              position: "absolute",
+              left: 12,
+              top: "50%",
+              transform: "translateY(-50%)",
+              color: "var(--text-muted)",
+              pointerEvents: "none",
+            }}
+          />
+          <input
+            className="input"
+            style={{ paddingLeft: 36, paddingRight: q ? 32 : 12, width: "100%" }}
+            placeholder="Cari kode (102/131), nama customer/POS, atau keterangan..."
+            value={q}
+            onChange={(e) => handleSearchChange(e.target.value)}
+          />
+          {q && (
+            <button
+              onClick={() => handleSearchChange("")}
+              title="Hapus pencarian"
+              style={{
+                position: "absolute",
+                right: 8,
+                top: "50%",
+                transform: "translateY(-50%)",
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                color: "var(--text-muted)",
+                padding: 4,
+                display: "flex",
+                alignItems: "center",
+              }}
+            >
+              <X size={14} />
+            </button>
+          )}
+        </div>
+        {q && (
+          <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+            Ditemukan <strong>{total}</strong> antrean cocok
+          </span>
+        )}
+      </div>
+
+      {/* Count badges / Filter Jenis */}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 20 }}>
         <button
           className={`badge ${filterJenis === "" ? "badge-menunggu" : "badge-draft"}`}
           style={{ cursor: "pointer", padding: "5px 12px" }}
-          onClick={() => setFilterJenis("")}
+          onClick={() => handleFilterJenis("")}
         >
           Semua ({totalPending})
         </button>
-        {counts.map(c => (
+        {counts.map((c) => (
           <button
             key={c.jenis}
             className={`badge ${filterJenis === c.jenis ? "badge-menunggu" : "badge-draft"}`}
             style={{ cursor: "pointer", padding: "5px 12px" }}
-            onClick={() => setFilterJenis(c.jenis)}
+            onClick={() => handleFilterJenis(c.jenis)}
           >
             {JENIS_LABEL[c.jenis] || c.jenis} ({c.jumlah})
           </button>
@@ -102,9 +188,26 @@ export default function ApprovalsPage() {
         </div>
       ) : approvals.length === 0 ? (
         <div className="card" style={{ padding: 48, textAlign: "center" }}>
-          <CheckCircle2 size={48} style={{ color: "var(--success-600)", margin: "0 auto 12px" }} />
-          <div style={{ fontWeight: 600, fontSize: 16 }}>Tidak ada item menunggu approval</div>
-          <div style={{ color: "var(--text-muted)", fontSize: 14, marginTop: 4 }}>Semua bersih!</div>
+          {q ? (
+            <>
+              <AlertTriangle size={42} style={{ color: "var(--warning-600)", margin: "0 auto 12px" }} />
+              <div style={{ fontWeight: 600, fontSize: 16 }}>
+                Tidak ada antrean approval yang cocok dengan kata kunci &quot;{q}&quot;
+              </div>
+              <div style={{ color: "var(--text-muted)", fontSize: 13, marginTop: 4, marginBottom: 14 }}>
+                Silakan periksa kembali ejaan atau coba kata kunci kode/nama yang berbeda.
+              </div>
+              <button onClick={() => handleSearchChange("")} className="btn btn-outline btn-sm">
+                Reset Pencarian
+              </button>
+            </>
+          ) : (
+            <>
+              <CheckCircle2 size={48} style={{ color: "var(--success-600)", margin: "0 auto 12px" }} />
+              <div style={{ fontWeight: 600, fontSize: 16 }}>Tidak ada item menunggu approval</div>
+              <div style={{ color: "var(--text-muted)", fontSize: 14, marginTop: 4 }}>Semua bersih!</div>
+            </>
+          )}
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -140,10 +243,10 @@ export default function ApprovalsPage() {
                             className="input select"
                             style={{ maxWidth: 360, height: 36, fontSize: 13 }}
                             value={selectedOutlet[ap.id] || ""}
-                            onChange={e => setSelectedOutlet(prev => ({ ...prev, [ap.id]: e.target.value }))}
+                            onChange={(e) => setSelectedOutlet((prev) => ({ ...prev, [ap.id]: e.target.value }))}
                           >
                             <option value="">— Pilih outlet tujuan —</option>
-                            {outlets.map(o => (
+                            {outlets.map((o) => (
                               <option key={o.id} value={o.id}>
                                 {o.nama_pemilik} · {o.nama_outlet} [{o.tipe}]
                               </option>
@@ -154,7 +257,7 @@ export default function ApprovalsPage() {
                             disabled={!selectedOutlet[ap.id] || isBusy}
                             onClick={() => resolve(ap.id, "disetujui", selectedOutlet[ap.id])}
                           >
-                            <GitMerge size={13} /> Petakan & Setujui
+                            <GitMerge size={13} /> Petakan &amp; Setujui
                           </button>
                           <button
                             className="btn btn-outline btn-sm"
@@ -224,10 +327,10 @@ export default function ApprovalsPage() {
                             className="input select"
                             style={{ maxWidth: 360, height: 36, fontSize: 13 }}
                             value={selectedOutlet[ap.id] || ""}
-                            onChange={e => setSelectedOutlet(prev => ({ ...prev, [ap.id]: e.target.value }))}
+                            onChange={(e) => setSelectedOutlet((prev) => ({ ...prev, [ap.id]: e.target.value }))}
                           >
                             <option value="">— Petakan ke Unit Usaha CRM —</option>
-                            {outlets.map(o => (
+                            {outlets.map((o) => (
                               <option key={o.id} value={o.id}>
                                 {o.nama_pemilik} · {o.nama_outlet} [{o.tipe}]
                               </option>
@@ -280,6 +383,20 @@ export default function ApprovalsPage() {
               </div>
             );
           })}
+
+          {/* Pagination bar */}
+          {approvals.length > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <Pagination
+                currentPage={page}
+                totalPages={totalPages}
+                totalItems={total}
+                pageSize={20}
+                itemLabel="antrean approval"
+                onPageChange={setPage}
+              />
+            </div>
+          )}
         </div>
       )}
     </div>

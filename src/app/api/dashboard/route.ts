@@ -82,7 +82,7 @@ export async function GET(request: NextRequest) {
       periodLabel = 'Semua Periode';
     }
 
-    // 3. Filtered Totals (Transaksi, Poin, Kupon, Count Invoices)
+    // 3. Filtered Totals (Transaksi Penjualan, Poin, Kupon, Count Invoices)
     const totalsQuery = `
       SELECT
         COALESCE(SUM(inv.poin), 0)   AS total_poin,
@@ -98,6 +98,31 @@ export async function GET(request: NextRequest) {
       total_kupon: number;
       total_transaksi: number;
       total_invoices: number;
+    };
+
+    // 3b. Filtered Waste Purchasing Totals (Pembelian Limbah UCO)
+    let wasteDateCondition = '';
+    const wasteDateParams: string[] = [];
+    if (activeStartDate && activeEndDate) {
+      wasteDateCondition = 'AND w.tanggal >= ? AND w.tanggal <= ?';
+      wasteDateParams.push(activeStartDate, activeEndDate);
+    }
+
+    const wasteTotalsQuery = `
+      SELECT
+        COUNT(w.id)                      AS total_waste_trx,
+        COALESCE(SUM(w.berat_kg), 0)     AS total_waste_kg,
+        COALESCE(SUM(w.total_rupiah), 0) AS total_waste_rupiah,
+        COALESCE(SUM(w.poin), 0)         AS total_waste_poin
+      FROM waste_purchases w
+      WHERE 1=1
+        ${wasteDateCondition}
+    `;
+    const wasteTotals = db.prepare(wasteTotalsQuery).get(...wasteDateParams) as {
+      total_waste_trx: number;
+      total_waste_kg: number;
+      total_waste_rupiah: number;
+      total_waste_poin: number;
     };
 
     // 4. Breakdown per Lini Bisnis (Retail, UKM, Grosir)
@@ -191,6 +216,7 @@ export async function GET(request: NextRequest) {
       availableMonths,
       availableYears: distinctYears,
       totals,
+      wasteTotals,
       byLiniBisnis,
       topMembers,
       monthlyTrend,

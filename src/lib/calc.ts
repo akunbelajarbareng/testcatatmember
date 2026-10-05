@@ -50,6 +50,10 @@ export interface StatementData {
   // Bulan berjalan
   bulan_transaksi: number;
   bulan_poin: number;
+  bulan_belanja_poin?: number;
+  gross_bulan_poin?: number;
+  gross_waste_bulan_poin?: number;
+  devaluasi_waste_bulan_poin?: number;
   bulan_bonus_poin: number; // Selalu 0 fase ini
   bulan_kupon: number;
   // Kumulatif sejak awal periode (Sep 2026) s.d. hari pengecekan / transaksi terakhir
@@ -75,6 +79,28 @@ export interface StatementData {
   sebelumnya_kumulatif_kupon?: number;
   total_devaluasi_kumulatif_poin?: number;
   total_devaluasi_kumulatif_kupon?: number;
+  // Waste Purchasing Metrics (UCO)
+  waste_bulan_kg: number;
+  waste_bulan_rupiah: number;
+  waste_bulan_poin: number;
+  waste_kumulatif_kg: number;
+  waste_kumulatif_rupiah: number;
+  waste_kumulatif_poin: number;
+  outlets_waste?: Array<{
+    outlet_id: string;
+    nama_outlet: string;
+    berat_kg: number;
+    total_rupiah: number;
+    poin: number;
+    is_void?: boolean;
+  }>;
+  // Nilai Penghematan Customer (Savings)
+  hemat_trx_count: number;
+  saving_parkir_per_trx: number;
+  saving_kurir_per_trx: number;
+  total_hemat_parkir: number;
+  total_hemat_kurir: number;
+  total_nilai_penghematan: number;
 }
 
 export interface MonthlyHistory {
@@ -88,6 +114,9 @@ export interface MonthlyHistory {
   is_suspended?: boolean;
   devaluasi_poin?: number;
   devaluasi_kupon?: number;
+  waste_rupiah?: number;
+  waste_kg?: number;
+  waste_poin?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -378,6 +407,82 @@ export function buildStatementData(identityId: string, bulan: string): Statement
     grossCumKupon += Math.floor(inv.jumlah / nilaiKupon);
   }
 
+  // ---------------------------------------------------------------------------
+  // Waste Purchasing Calculations (UCO)
+  // ---------------------------------------------------------------------------
+  const wasteMonthRow = db
+    .prepare(`
+      SELECT
+        COALESCE(SUM(w.berat_kg), 0)     AS total_kg,
+        COALESCE(SUM(w.total_rupiah), 0) AS total_rupiah,
+        COALESCE(SUM(w.poin), 0)         AS total_poin
+      FROM waste_purchases w
+      WHERE w.identity_id = ?
+        AND w.tanggal >= ? AND w.tanggal <= ?
+    `)
+    .get(identityId, bulanStart, bulanEnd) as {
+      total_kg: number;
+      total_rupiah: number;
+      total_poin: number;
+    };
+
+  const grossWasteBulanPoin = wasteMonthRow?.total_poin ?? 0;
+  const wasteBulanKg = wasteMonthRow?.total_kg ?? 0;
+  const wasteBulanRupiah = wasteMonthRow?.total_rupiah ?? 0;
+  const wasteBulanPoin = isMonthSuspended ? 0 : grossWasteBulanPoin;
+  const devaluasiWasteBulanPoin = isMonthSuspended ? grossWasteBulanPoin : 0;
+
+  const wasteCumRow = db
+    .prepare(`
+      SELECT
+        COALESCE(SUM(w.berat_kg), 0)     AS total_kg,
+        COALESCE(SUM(w.total_rupiah), 0) AS total_rupiah,
+        COALESCE(SUM(w.poin), 0)         AS total_poin
+      FROM waste_purchases w
+      WHERE w.identity_id = ?
+        AND w.tanggal >= '2026-09-01'
+        AND w.tanggal <= ?
+    `)
+    .get(identityId, bulanEnd) as {
+      total_kg: number;
+      total_rupiah: number;
+      total_poin: number;
+    };
+
+  const grossWasteCumPoin = wasteCumRow?.total_poin ?? 0;
+  const wasteKumulatifKg = wasteCumRow?.total_kg ?? 0;
+  const wasteKumulatifRupiah = wasteCumRow?.total_rupiah ?? 0;
+  const wasteKumulatifPoin = isMonthSuspended ? 0 : grossWasteCumPoin;
+
+  const outletsWaste = db
+    .prepare(`
+      SELECT
+        w.outlet_id,
+        o.nama_outlet,
+        COALESCE(SUM(w.berat_kg), 0)     AS berat_kg,
+        COALESCE(SUM(w.total_rupiah), 0) AS total_rupiah,
+        COALESCE(SUM(w.poin), 0)         AS poin
+      FROM waste_purchases w
+      JOIN outlets o ON o.id = w.outlet_id
+      WHERE w.identity_id = ?
+        AND w.tanggal >= ? AND w.tanggal <= ?
+      GROUP BY w.outlet_id
+    `)
+    .all(identityId, bulanStart, bulanEnd) as Array<{
+      outlet_id: string;
+      nama_outlet: string;
+      berat_kg: number;
+      total_rupiah: number;
+      poin: number;
+      is_void?: boolean;
+    }>;
+
+  if (isMonthSuspended) {
+    for (const ow of outletsWaste) {
+      ow.is_void = true;
+    }
+  }
+
   const voidedCouponsDb = db.prepare(`
     SELECT COALESCE(SUM(voided_coupons_count), 0) AS total_voided_coupons,
            COALESCE(SUM(wiped_points), 0) AS total_wiped_points
@@ -385,16 +490,47 @@ export function buildStatementData(identityId: string, bulan: string): Statement
     WHERE identity_id = ?
   `).get(identityId) as { total_voided_coupons: number; total_wiped_points: number };
 
-  const netKumulatifPoin = kumulatifRow?.kumulatif_poin ?? 0;
+  const netKumulatifPoin = (kumulatifRow?.kumulatif_poin ?? 0) + wasteKumulatifPoin;
   const netKumulatifKupon = kumulatifRow?.kumulatif_kupon ?? 0;
 
-  const sebelumnyaKumulatifPoin = Math.max(grossCumPoin, netKumulatifPoin + voidedCouponsDb.total_wiped_points);
+  // Devaluasi & Void gabungan (Belanja + Waste Purchasing)
+  const totalDevaluasiBulanPoin = (bulanTotal.devaluasi_poin || 0) + devaluasiWasteBulanPoin;
+  const totalDevaluasiBulanKupon = bulanTotal.devaluasi_kupon || 0;
+  const grossBulanPoin = (bulanTotal.poin + (bulanTotal.devaluasi_poin || 0)) + grossWasteBulanPoin;
+
+  const sebelumnyaKumulatifPoin = Math.max(
+    grossCumPoin + grossWasteCumPoin,
+    netKumulatifPoin + voidedCouponsDb.total_wiped_points + (isMonthSuspended ? grossWasteCumPoin : 0)
+  );
   const sebelumnyaKumulatifKupon = Math.max(grossCumKupon, netKumulatifKupon + voidedCouponsDb.total_voided_coupons);
 
   const totalDevaluasiKumulatifPoin = Math.max(0, sebelumnyaKumulatifPoin - netKumulatifPoin);
   const totalDevaluasiKumulatifKupon = Math.max(0, sebelumnyaKumulatifKupon - netKumulatifKupon);
 
   const hasDevaluasi = isMonthSuspended || totalDevaluasiKumulatifPoin > 0 || totalDevaluasiKumulatifKupon > 0;
+
+  // ---------------------------------------------------------------------------
+  // Customer Savings Calculation (Nilai yang dihemat per bulan)
+  // ---------------------------------------------------------------------------
+  const savingParkirRow = db.prepare(`SELECT nilai FROM rules_config WHERE kunci = 'saving_parkir_per_trx'`).get() as { nilai: number } | undefined;
+  const savingKurirRow = db.prepare(`SELECT nilai FROM rules_config WHERE kunci = 'saving_kurir_per_trx'`).get() as { nilai: number } | undefined;
+  const savingParkirPerTrx = savingParkirRow?.nilai ?? 2000;
+  const savingKurirPerTrx = savingKurirRow?.nilai ?? 15000;
+
+  const trxCountRow = db
+    .prepare(`
+      SELECT COUNT(i.id) AS trx_count
+      FROM invoices i
+      JOIN outlets o ON i.outlet_id = o.id
+      WHERE o.identity_id = ?
+        AND i.tanggal >= ? AND i.tanggal <= ?
+    `)
+    .get(identityId, bulanStart, bulanEnd) as { trx_count: number } | undefined;
+
+  const hematTrxCount = trxCountRow?.trx_count ?? 0;
+  const totalHematParkir = hematTrxCount * savingParkirPerTrx;
+  const totalHematKurir = hematTrxCount * savingKurirPerTrx;
+  const totalNilaiPenghematan = totalHematParkir + totalHematKurir;
 
   // Histori 13 bulan
   const histori: MonthlyHistory[] = PERIODE_MONTHS.map((m, idx) => {
@@ -428,21 +564,40 @@ export function buildStatementData(identityId: string, bulan: string): Statement
       mGrossKupon += Math.floor(inv.jumlah / nilaiKupon);
     }
 
-    const mDevaluasiPoin = Math.max(0, mGrossPoin - mActualPoin);
+    const monthWaste = db
+      .prepare(`
+        SELECT
+          COALESCE(SUM(poin), 0)         AS poin,
+          COALESCE(SUM(total_rupiah), 0) AS total_rupiah,
+          COALESCE(SUM(berat_kg), 0)     AS berat_kg
+        FROM waste_purchases
+        WHERE identity_id = ? AND tanggal >= ? AND tanggal <= ?
+      `)
+      .get(identityId, mStart, mEnd) as { poin: number; total_rupiah: number; berat_kg: number } | undefined;
+
+    const rawMonthWastePoin = monthWaste?.poin ?? 0;
+    const mDevaluasiBelanjaPoin = Math.max(0, mGrossPoin - mActualPoin);
     const mDevaluasiKupon = Math.max(0, mGrossKupon - mActualKupon);
-    const mIsSuspended = (mDevaluasiPoin > 0 || mDevaluasiKupon > 0) && (mActualPoin === 0 && mTotalTransaksi > 0);
+    const mIsSuspended = (m === bulan && isMonthSuspended) || ((mDevaluasiBelanjaPoin > 0 || mDevaluasiKupon > 0) && (mActualPoin === 0 && mTotalTransaksi > 0));
+
+    const monthWastePoin = mIsSuspended ? 0 : rawMonthWastePoin;
+    const mDevaluasiWastePoin = mIsSuspended ? rawMonthWastePoin : 0;
+    const mDevaluasiPoin = mDevaluasiBelanjaPoin + mDevaluasiWastePoin;
 
     return {
       no: idx + 1,
       bulan: m,
       label: bulanLabel(m),
       total_transaksi: mTotalTransaksi,
-      poin: mActualPoin,
+      poin: mActualPoin + monthWastePoin,
       bonus_poin: 0,  // Fase berikutnya (PRD 5)
       kupon: mActualKupon,
       is_suspended: mIsSuspended,
       devaluasi_poin: mDevaluasiPoin,
       devaluasi_kupon: mDevaluasiKupon,
+      waste_rupiah: monthWaste?.total_rupiah ?? 0,
+      waste_kg: monthWaste?.berat_kg ?? 0,
+      waste_poin: monthWastePoin,
     };
   });
 
@@ -461,7 +616,11 @@ export function buildStatementData(identityId: string, bulan: string): Statement
     bulan,
     bulan_label: bulanLabel(bulan),
     bulan_transaksi: bulanTotal.transaksi,
-    bulan_poin: bulanTotal.poin,
+    bulan_belanja_poin: bulanTotal.poin,
+    bulan_poin: isMonthSuspended ? 0 : (bulanTotal.poin + wasteBulanPoin),
+    gross_bulan_poin: grossBulanPoin,
+    gross_waste_bulan_poin: grossWasteBulanPoin,
+    devaluasi_waste_bulan_poin: devaluasiWasteBulanPoin,
     bulan_bonus_poin: 0,
     bulan_kupon: bulanTotal.kupon,
     kumulatif_poin: netKumulatifPoin,
@@ -476,12 +635,27 @@ export function buildStatementData(identityId: string, bulan: string): Statement
     suspend_reason: isMonthSuspended ? activeReason : null,
     suspend_note: suspendNote,
     has_devaluasi: hasDevaluasi,
-    devaluasi_bulan_poin: bulanTotal.devaluasi_poin,
-    devaluasi_bulan_kupon: bulanTotal.devaluasi_kupon,
+    devaluasi_bulan_poin: totalDevaluasiBulanPoin,
+    devaluasi_bulan_kupon: totalDevaluasiBulanKupon,
     sebelumnya_kumulatif_poin: sebelumnyaKumulatifPoin,
     sebelumnya_kumulatif_kupon: sebelumnyaKumulatifKupon,
     total_devaluasi_kumulatif_poin: totalDevaluasiKumulatifPoin,
     total_devaluasi_kumulatif_kupon: totalDevaluasiKumulatifKupon,
+    // Waste Purchasing metrics
+    waste_bulan_kg: wasteBulanKg,
+    waste_bulan_rupiah: wasteBulanRupiah,
+    waste_bulan_poin: wasteBulanPoin,
+    waste_kumulatif_kg: wasteKumulatifKg,
+    waste_kumulatif_rupiah: wasteKumulatifRupiah,
+    waste_kumulatif_poin: wasteKumulatifPoin,
+    outlets_waste: outletsWaste,
+    // Nilai Penghematan Customer
+    hemat_trx_count: hematTrxCount,
+    saving_parkir_per_trx: savingParkirPerTrx,
+    saving_kurir_per_trx: savingKurirPerTrx,
+    total_hemat_parkir: totalHematParkir,
+    total_hemat_kurir: totalHematKurir,
+    total_nilai_penghematan: totalNilaiPenghematan,
   };
 }
 

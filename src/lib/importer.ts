@@ -153,9 +153,14 @@ export async function importMasterCustomer(buffer: Buffer, filename: string): Pr
       if (!nama) {
         barisWarn++;
         peringatan.push(`Nama kosong untuk kode: ${kode}`);
-        db.prepare(`INSERT INTO approvals(jenis, payload, batch_id) VALUES (?, ?, ?)`)
-          .run('anomali_master', JSON.stringify({ kode, nama: '', alamat: row.Alamat, kategori: row.Kategori, alasan: 'Nama kosong' }), batchId);
-        approvalCount++;
+        const existingAnomali = db
+          .prepare(`SELECT id FROM approvals WHERE jenis = 'anomali_master' AND json_extract(payload, '$.kode') = ?`)
+          .get(kode);
+        if (!existingAnomali) {
+          db.prepare(`INSERT INTO approvals(jenis, payload, batch_id) VALUES (?, ?, ?)`)
+            .run('anomali_master', JSON.stringify({ kode, nama: '', alamat: row.Alamat, kategori: row.Kategori, alasan: 'Nama kosong' }), batchId);
+          approvalCount++;
+        }
         continue;
       }
 
@@ -163,9 +168,14 @@ export async function importMasterCustomer(buffer: Buffer, filename: string): Pr
       if (!kode.startsWith('131-') && !kode.startsWith('102-')) {
         barisWarn++;
         peringatan.push(`Kode tidak lazim: ${kode} (${nama})`);
-        db.prepare(`INSERT INTO approvals(jenis, payload, batch_id) VALUES (?, ?, ?)`)
-          .run('anomali_master', JSON.stringify({ kode, nama, alamat: row.Alamat, kategori: row.Kategori, alasan: 'Kode tidak lazim' }), batchId);
-        approvalCount++;
+        const existingAnomali = db
+          .prepare(`SELECT id FROM approvals WHERE jenis = 'anomali_master' AND json_extract(payload, '$.kode') = ?`)
+          .get(kode);
+        if (!existingAnomali) {
+          db.prepare(`INSERT INTO approvals(jenis, payload, batch_id) VALUES (?, ?, ?)`)
+            .run('anomali_master', JSON.stringify({ kode, nama, alamat: row.Alamat, kategori: row.Kategori, alasan: 'Kode tidak lazim' }), batchId);
+          approvalCount++;
+        }
         continue;
       }
 
@@ -176,9 +186,14 @@ export async function importMasterCustomer(buffer: Buffer, filename: string): Pr
         if (info.tipe === 'invalid') {
           barisWarn++;
           peringatan.push(`Format kode 102 tidak valid: ${kode} (${nama}) — ${info.reason}`);
-          db.prepare(`INSERT INTO approvals(jenis, payload, batch_id) VALUES (?, ?, ?)`)
-            .run('anomali_master', JSON.stringify({ kode, nama, alamat: row.Alamat, kategori: row.Kategori, alasan: info.reason }), batchId);
-          approvalCount++;
+          const existingAnomali = db
+            .prepare(`SELECT id FROM approvals WHERE jenis = 'anomali_master' AND json_extract(payload, '$.kode') = ?`)
+            .get(kode);
+          if (!existingAnomali) {
+            db.prepare(`INSERT INTO approvals(jenis, payload, batch_id) VALUES (?, ?, ?)`)
+              .run('anomali_master', JSON.stringify({ kode, nama, alamat: row.Alamat, kategori: row.Kategori, alasan: info.reason }), batchId);
+            approvalCount++;
+          }
           continue;
         }
 
@@ -186,9 +201,9 @@ export async function importMasterCustomer(buffer: Buffer, filename: string): Pr
         if (tabrakanKode.has(info.clean)) {
           barisWarn++;
           peringatan.push(`Kode 102 tabrakan: ${kode} dipakai oleh ${kode102Map.get(info.clean)?.join(', ')}`);
-          // Masukkan ke approval satu kali per kode tabrakan
+          // Masukkan ke approval satu kali per kode tabrakan (lintas semua status)
           const existingApproval = db
-            .prepare(`SELECT id FROM approvals WHERE jenis = 'kode_tabrakan' AND json_extract(payload, '$.kode') = ? AND status = 'menunggu'`)
+            .prepare(`SELECT id FROM approvals WHERE jenis = 'kode_tabrakan' AND json_extract(payload, '$.kode') = ?`)
             .get(info.clean);
           if (!existingApproval) {
             db.prepare(`INSERT INTO approvals(jenis, payload, batch_id) VALUES (?, ?, ?)`)
@@ -241,7 +256,7 @@ export async function importMasterCustomer(buffer: Buffer, filename: string): Pr
             barisWarn++;
             peringatan.push(`Outlet ${info.clean} (${nama}) tidak memiliki Akun Utama (${identityId}) di CRM`);
             const existingApproval = db
-              .prepare(`SELECT id FROM approvals WHERE jenis = 'outlet_tanpa_induk' AND json_extract(payload, '$.kode') = ? AND status = 'menunggu'`)
+              .prepare(`SELECT id FROM approvals WHERE jenis = 'outlet_tanpa_induk' AND json_extract(payload, '$.kode') = ?`)
               .get(info.clean);
             if (!existingApproval) {
               db.prepare(`INSERT INTO approvals(jenis, payload, batch_id) VALUES (?, ?, ?)`)
@@ -288,20 +303,26 @@ export async function importMasterCustomer(buffer: Buffer, filename: string): Pr
       } else {
         // Kode 131 — simpan ke approvals sebagai kode POS lama untuk referensi pemetaan
         barisOk++;
-        const existingApproval = db
-          .prepare(`SELECT id FROM approvals WHERE jenis = 'kode_lama_131' AND json_extract(payload, '$.kode') = ? AND status = 'menunggu'`)
-          .get(kode);
-        if (!existingApproval) {
-          db.prepare(`INSERT INTO approvals(jenis, payload, batch_id) VALUES (?, ?, ?)`)
-            .run('kode_lama_131', JSON.stringify({
-              kode,
-              nama,
-              alamat: row.Alamat || '',
-              kota: row.Kota || '',
-              kategori: row.Kategori || '',
-              alasan: 'Customer terdaftar dengan kode POS lama (131). Dapat dipetakan ke Akun Utama CRM.',
-            }), batchId);
-          approvalCount++;
+        // Cek apakah kode POS lama (131) ini sudah terdaftar sebagai outlet atau terpetakan di pos_aliases
+        const existingOutlet131 = db.prepare(`SELECT id FROM outlets WHERE id = ? OR id_pos_lama = ?`).get(kode, kode);
+        const existingAlias131 = db.prepare(`SELECT id FROM pos_aliases WHERE nama_pos = ? OR outlet_id = ?`).get(nama, kode);
+
+        if (!existingOutlet131 && !existingAlias131) {
+          const existingApproval = db
+            .prepare(`SELECT id FROM approvals WHERE jenis = 'kode_lama_131' AND json_extract(payload, '$.kode') = ?`)
+            .get(kode);
+          if (!existingApproval) {
+            db.prepare(`INSERT INTO approvals(jenis, payload, batch_id) VALUES (?, ?, ?)`)
+              .run('kode_lama_131', JSON.stringify({
+                kode,
+                nama,
+                alamat: row.Alamat || '',
+                kota: row.Kota || '',
+                kategori: row.Kategori || '',
+                alasan: 'Customer terdaftar dengan kode POS lama (131). Dapat dipetakan ke Akun Utama CRM.',
+              }), batchId);
+            approvalCount++;
+          }
         }
       }
     }
@@ -443,10 +464,10 @@ export async function importTransaksi(buffer: Buffer, filename: string, bulan: s
       } else {
         // Nama belum terpetakan — beri peringatan (tidak menghalangi impor)
         barisWarn++;
-        // Cek apakah sudah ada peringatan untuk nama ini di batch ini
+        // Cek apakah sudah ada antrean approval untuk nama ini (lintas batch)
         const existingWarn = db
-          .prepare(`SELECT id FROM approvals WHERE jenis = 'nama_belum_dipetakan' AND json_extract(payload, '$.nama_pos') = ? AND batch_id = ?`)
-          .get(namaCustomer, batchId);
+          .prepare(`SELECT id FROM approvals WHERE jenis = 'nama_belum_dipetakan' AND json_extract(payload, '$.nama_pos') = ?`)
+          .get(namaCustomer);
         if (!existingWarn) {
           peringatan.push(`Nama belum terpetakan: "${namaCustomer}"`);
           db.prepare(`INSERT INTO approvals(jenis, payload, batch_id) VALUES (?, ?, ?)`)
