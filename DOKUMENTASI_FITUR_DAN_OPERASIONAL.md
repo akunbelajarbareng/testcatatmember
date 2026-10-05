@@ -103,7 +103,20 @@ Komponen cetak presisi pada [`StatementDocument.tsx`](file:///c:/01.%20Chandra/0
   - **Halaman 1 (Customer Facing)**: Menampilkan 2 kartu sorotan manfaat finansial berdampingan:
     1. *Nilai Penghematan Belanja Bulan Ini*: Total transaksi nota, rincian hemat parkir, rincian subsidi kurir, dan total rupiah yang dihemat.
     2. *Pendapatan Tambahan Waste (UCO)*: Total Kg minyak jelantah disetor, dana tunai yang diterima, serta bonus poin Oriental.
-  - **Halaman 2 (Internal Audit)**: Dilengkapi tabel *Pencatatan Pembelian Limbah (Waste UCO)* per outlet untuk verifikasi pembukuan kas keluar.
+### K. Modul Antrean Approval & Pemetaan Entitas (`/approvals`)
+- **Tujuan**: Menyediakan pusat kendali bagi Owner/Manajemen untuk meninjau data yang memerlukan otorisasi, penanganan anomali, atau pemetaan manual sebelum masuk ke pembukuan resmi CRM.
+- **Kategori Antrean**:
+  - `nama_belum_dipetakan`: Nama pelanggan di faktur POS yang belum dipetakan ke outlet CRM. Owner dapat langsung memilih outlet tujuan dan menyetujui pemetaan.
+  - `kode_tabrakan`: Satu nomor kode 102 yang terdeteksi dipakai oleh lebih dari satu nama berbeda pada file master Excel.
+  - `outlet_tanpa_induk`: Outlet yang nomor induk Akun Utamanya belum terdaftar di CRM.
+  - `kode_lama_131`: Pelanggan dengan kode POS lama yang dapat ditautkan ke profil unit usaha CRM.
+  - `anomali_master`: Baris master dengan format kode tidak valid, nama kosong, atau kode tidak lazim.
+- **Fitur Pencarian Cerdas & Paginasi**:
+  - Bilah pencarian real-time untuk mencari berdasarkan ID approval, kode 102/131, nama customer/POS, nama file Excel asal, atau alasan anomali.
+  - Sistem paginasi 20 item per halaman (`Pagination`) dengan counter kecocokan dan tombol reset cepat (✕).
+- **Proteksi Deduplikasi**:
+  - Sistem memeriksa riwayat approval lintas seluruh status (`menunggu`, `disetujui`, `ditolak`, `diabaikan`).
+  - Import berkala data master customer bulanan tidak akan menambahkan antrean baru untuk entitas yang sudah pernah ditinjau atau telah terpetakan di CRM.
 
 ---
 
