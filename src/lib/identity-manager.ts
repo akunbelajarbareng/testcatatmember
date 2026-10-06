@@ -8,6 +8,7 @@
  */
 import db from './db';
 import type { OutletTipe } from './calc';
+import { isMemberSuspendedOnDate } from './member-penalty';
 
 // ---------------------------------------------------------------------------
 // Rate & Rule Helpers
@@ -135,8 +136,9 @@ export function transferOutlet(outletId: string, targetIdentityId: string): void
     const updateInv = db.prepare(`UPDATE invoices SET poin = ?, kupon = ?, is_excluded = ? WHERE id = ?`);
 
     for (const inv of invoices) {
-      const isExcluded = exclusions.some((ex) => inv.tanggal >= ex.dari && inv.tanggal <= ex.sampai);
-      if (isExcluded) {
+      const isDateExcluded = exclusions.some((ex) => inv.tanggal >= ex.dari && inv.tanggal <= ex.sampai);
+      const isSuspended = isMemberSuspendedOnDate(targetIdentityId, inv.tanggal);
+      if (isDateExcluded || isSuspended) {
         updateInv.run(0, 0, 1, inv.id);
       } else {
         const poin = Math.floor(inv.jumlah / rate);
@@ -208,8 +210,9 @@ export function transferAlias(aliasIdentifier: number | string, targetOutletId: 
     const updateInv = db.prepare(`UPDATE invoices SET outlet_id = ?, poin = ?, kupon = ?, is_excluded = ? WHERE id = ?`);
 
     for (const inv of invoices) {
-      const isExcluded = exclusions.some((ex) => inv.tanggal >= ex.dari && inv.tanggal <= ex.sampai);
-      if (isExcluded) {
+      const isDateExcluded = exclusions.some((ex) => inv.tanggal >= ex.dari && inv.tanggal <= ex.sampai);
+      const isSuspended = isMemberSuspendedOnDate(identityId, inv.tanggal);
+      if (isDateExcluded || isSuspended) {
         updateInv.run(targetOutletId, 0, 0, 1, inv.id);
       } else {
         const poin = Math.floor(inv.jumlah / rate);

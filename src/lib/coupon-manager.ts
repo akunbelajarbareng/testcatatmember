@@ -162,7 +162,8 @@ export function getMemberCouponQuota(identityId: string): CouponQuota {
       AND i.is_excluded = 0
   `).get(identityId) as { total_hak: number };
 
-  const hak_kupon = hakRow.total_hak;
+  const isSuspended = identity.is_suspended === 1;
+  const hak_kupon = isSuspended ? 0 : hakRow.total_hak;
 
   // Kupon fisik aktif yang sudah diserahkan
   const takenRow = db.prepare(`
@@ -172,7 +173,7 @@ export function getMemberCouponQuota(identityId: string): CouponQuota {
   `).get(identityId) as { total_diambil: number };
 
   const sudah_diambil = takenRow.total_diambil;
-  const sisa_kuota = Math.max(0, hak_kupon - sudah_diambil);
+  const sisa_kuota = isSuspended ? 0 : Math.max(0, hak_kupon - sudah_diambil);
 
   // Ambil daftar outlet aktif milik identity ini
   const outlets = db.prepare(`

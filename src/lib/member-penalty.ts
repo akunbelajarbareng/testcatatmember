@@ -109,25 +109,129 @@ export function getMemberPenaltyInfo(identityId: string): MemberPenaltyInfo {
  */
 export function isMemberSuspendedOnDate(identityId: string, tanggal: string): boolean {
   const row = db.prepare(`
-    SELECT is_suspended, suspend_type, suspend_dari, suspend_sampai
+    SELECT is_suspended, suspend_type, suspend_dari, suspend_sampai, suspend_reset_points
     FROM identities
     WHERE id = ?
   `).get(identityId) as any | undefined;
 
-  if (!row || row.is_suspended !== 1) return false;
+  if (row && row.is_suspended === 1) {
+    const { suspend_type, suspend_dari, suspend_sampai, suspend_reset_points } = row;
+    if (suspend_reset_points === 1) {
+      if (!suspend_dari || tanggal <= (suspend_sampai || '9999-12-31')) return true;
+    }
+    if (!suspend_dari) return true; // disuspend tanpa batas
 
-  const { suspend_type, suspend_dari, suspend_sampai } = row;
-  if (!suspend_dari) return true; // disuspend tanpa batas
-
-  if (suspend_type === 'permanent') {
-    return tanggal >= suspend_dari;
+    if (suspend_type === 'permanent') {
+      if (tanggal >= suspend_dari) return true;
+    } else if (suspend_type === 'temporary' && suspend_sampai) {
+      if (tanggal >= suspend_dari && tanggal <= suspend_sampai) return true;
+    } else if (tanggal >= suspend_dari) {
+      return true;
+    }
   }
 
-  if (suspend_type === 'temporary' && suspend_sampai) {
-    return tanggal >= suspend_dari && tanggal <= suspend_sampai;
+  // Riwayat sanksi yang pernah dijatuhkan (Aturan 2: Transaksi selama masa sanksi HANGUS PERMANEN tetap 0)
+  const penalty = db.prepare(`
+    SELECT id, reset_saldo_lama, dari, sampai
+    FROM member_penalties
+    WHERE identity_id = ?
+      AND (
+        (dari <= ? AND (sampai IS NULL OR sampai >= ?))
+        OR (reset_saldo_lama = 1 AND ? <= COALESCE(sampai, '9999-12-31'))
+      )
+    LIMIT 1
+  `).get(identityId, tanggal, tanggal, tanggal);
+
+  if (penalty) return true;
+
+  return false;
+}
+
+/**
+ * Sinkronisasi seluruh invoice & kupon member yang terkena sanksi:
+ * Memastikan semua invoice selama masa sanksi berstatus poin = 0, kupon = 0, is_excluded = 1
+ * Serta auto-void kupon fisik aktif jika akun berstatus sanksi.
+ */
+export function syncMemberPenaltyInvoices(identityId: string): number {
+  const identity = db.prepare(`
+    SELECT is_suspended, suspend_type, suspend_dari, suspend_sampai, suspend_reset_points, suspend_reason
+    FROM identities
+    WHERE id = ?
+  `).get(identityId) as {
+    is_suspended: number;
+    suspend_type?: string | null;
+    suspend_dari?: string | null;
+    suspend_sampai?: string | null;
+    suspend_reset_points?: number;
+    suspend_reason?: string | null;
+  } | undefined;
+
+  if (!identity) return 0;
+
+  let totalUpdated = 0;
+
+  const penalties = db.prepare(`
+    SELECT reset_saldo_lama, dari, sampai
+    FROM member_penalties
+    WHERE identity_id = ?
+  `).all(identityId) as Array<{ reset_saldo_lama: number; dari: string; sampai: string | null }>;
+
+  if (identity.is_suspended === 1) {
+    penalties.push({
+      reset_saldo_lama: identity.suspend_reset_points === 1 ? 1 : 0,
+      dari: identity.suspend_dari || '2026-09-01',
+      sampai: identity.suspend_type === 'permanent' ? null : (identity.suspend_sampai || null),
+    });
   }
 
-  return tanggal >= suspend_dari;
+  if (penalties.length === 0) return 0;
+
+  db.transaction(() => {
+    for (const p of penalties) {
+      if (p.reset_saldo_lama === 1) {
+        const res = db.prepare(`
+          UPDATE invoices
+          SET poin = 0, kupon = 0, is_excluded = 1
+          WHERE outlet_id IN (SELECT id FROM outlets WHERE identity_id = ?)
+            AND (poin > 0 OR kupon > 0 OR is_excluded = 0)
+            ${p.sampai ? 'AND tanggal <= ?' : ''}
+        `).run(identityId, ...(p.sampai ? [p.sampai] : []));
+        totalUpdated += res.changes;
+      } else {
+        const res = db.prepare(`
+          UPDATE invoices
+          SET poin = 0, kupon = 0, is_excluded = 1
+          WHERE outlet_id IN (SELECT id FROM outlets WHERE identity_id = ?)
+            AND tanggal >= ?
+            ${p.sampai ? 'AND tanggal <= ?' : ''}
+            AND (poin > 0 OR kupon > 0 OR is_excluded = 0)
+        `).run(identityId, p.dari, ...(p.sampai ? [p.sampai] : []));
+        totalUpdated += res.changes;
+      }
+    }
+
+    if (identity.is_suspended === 1) {
+      db.prepare(`
+        UPDATE coupons
+        SET status = 'void', void_reason = ?
+        WHERE identity_id = ? AND status = 'aktif'
+      `).run(`Gugur akibat sanksi: ${identity.suspend_reason || 'Evaluasi Khusus'}`, identityId);
+
+      db.prepare(`
+        UPDATE coupon_batches
+        SET status = 'void'
+        WHERE identity_id = ? AND status = 'aktif'
+      `).run(identityId);
+    }
+
+    db.prepare(`
+      UPDATE statements
+      SET status = 'perlu_revisi', updated_at = datetime('now','localtime')
+      WHERE identity_id = ?
+    `).run(identityId);
+  })();
+
+  return totalUpdated;
 }
 
 /**
@@ -313,6 +417,15 @@ export function applyMemberPenalty(params: ApplyPenaltyParams): {
       String(penaltyId),
       `Penjatuhan sanksi (${jenis_sanksi}) kepada member ${identity.nama_pemilik} (${identity_id}) oleh ${petugas.trim()}. Alasan: ${alasan.trim()}. Kupon di-void: ${voidedCouponsCount}, Poin dihanguskan: ${wipedPoints}`
     );
+
+    // -----------------------------------------------------------------------
+    // G. Tandai statement sebagai perlu revisi
+    // -----------------------------------------------------------------------
+    db.prepare(`
+      UPDATE statements
+      SET status = 'perlu_revisi', updated_at = datetime('now','localtime')
+      WHERE identity_id = ?
+    `).run(identity_id);
   })();
 
   return {

@@ -7,6 +7,7 @@ import * as XLSX from 'xlsx';
 import db from './db';
 import { hitungInvoice, recalcOutlet } from './calc';
 import type { OutletTipe } from './calc';
+import { isMemberSuspendedOnDate } from './member-penalty';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -574,8 +575,9 @@ export async function importTransaksi(buffer: Buffer, filename: string, bulan: s
           const identityId = outlet?.identity_id;
           const userExclusions = identityId ? exclusionsMap.get(identityId) || [] : [];
           const isDateExcluded = userExclusions.some(ex => tanggal >= ex.dari && tanggal <= ex.sampai);
+          const isDateSuspended = identityId ? isMemberSuspendedOnDate(identityId, tanggal) : false;
 
-          if (isDateExcluded) {
+          if (isDateExcluded || isDateSuspended) {
             isExcluded = 1;
             poin = 0;
             kupon = 0;

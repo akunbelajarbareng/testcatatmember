@@ -3,6 +3,7 @@
  * Implements PRD Section 5 rules exactly.
  */
 import db from './db';
+import { isMemberSuspendedOnDate, syncMemberPenaltyInvoices } from './member-penalty';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -172,10 +173,12 @@ export function recalcOutlet(outletId: string): void {
 
   const recalcAll = db.transaction(() => {
     for (const inv of invoices) {
-      const isExcluded = exclusions.some(
+      const isDateExcluded = exclusions.some(
         (ex) => inv.tanggal >= ex.dari && inv.tanggal <= ex.sampai
       );
-      if (isExcluded) {
+      const isSuspended = isMemberSuspendedOnDate(outlet.identity_id, inv.tanggal);
+
+      if (isDateExcluded || isSuspended) {
         updateStmt.run(0, 0, 1, inv.id);
       } else {
         const poin = Math.floor(inv.jumlah / rate);
@@ -300,6 +303,11 @@ export function buildStatementData(identityId: string, bulan: string): Statement
     }
   }
 
+  // Jika akun dalam sanksi, jalankan sinkronisasi invoice & kupon otomatis
+  if (isMonthSuspended) {
+    syncMemberPenaltyInvoices(identityId);
+  }
+
   // Outlet-outlet aktif ATAU outlet nonaktif yang memiliki transaksi pada bulan ini
   const outletsDb = db
     .prepare(`
@@ -351,14 +359,20 @@ export function buildStatementData(identityId: string, bulan: string): Statement
 
     for (const inv of invoices) {
       totalTransaksi += inv.jumlah;
-      actualPoin += inv.poin;
-      actualKupon += inv.kupon;
-      grossPoin += Math.floor(inv.jumlah / rate);
-      grossKupon += Math.floor(inv.jumlah / nilaiKupon);
+      const gPoin = Math.floor(inv.jumlah / rate);
+      const gKupon = Math.floor(inv.jumlah / nilaiKupon);
+      grossPoin += gPoin;
+      grossKupon += gKupon;
+
+      const isInvSuspended = isMonthSuspended || isMemberSuspendedOnDate(identityId, inv.tanggal) || inv.is_excluded === 1;
+      if (!isInvSuspended) {
+        actualPoin += inv.poin;
+        actualKupon += inv.kupon;
+      }
     }
 
-    const devaluasiPoinOutlet = Math.max(0, grossPoin - actualPoin);
-    const devaluasiKuponOutlet = Math.max(0, grossKupon - actualKupon);
+    const devaluasiPoinOutlet = isMonthSuspended ? grossPoin : Math.max(0, grossPoin - actualPoin);
+    const devaluasiKuponOutlet = isMonthSuspended ? grossKupon : Math.max(0, grossKupon - actualKupon);
     const isOutletDevalued = isMonthSuspended || (totalTransaksi > 0 && (devaluasiPoinOutlet > 0 || devaluasiKuponOutlet > 0));
 
     return {
@@ -367,8 +381,8 @@ export function buildStatementData(identityId: string, bulan: string): Statement
       tipe: o.tipe,
       identity_id: identityId,
       total_transaksi: totalTransaksi,
-      poin: actualPoin,
-      kupon: actualKupon,
+      poin: isMonthSuspended ? 0 : actualPoin,
+      kupon: isMonthSuspended ? 0 : actualKupon,
       poin_seharusnya: grossPoin,
       kupon_seharusnya: grossKupon,
       is_devalued: isOutletDevalued,
@@ -511,9 +525,10 @@ export function buildStatementData(identityId: string, bulan: string): Statement
   const netKumulatifKupon = kumulatifRow?.kumulatif_kupon ?? 0;
 
   // Devaluasi & Void gabungan (Belanja + Waste Purchasing)
-  const totalDevaluasiBulanPoin = (bulanTotal.devaluasi_poin || 0) + devaluasiWasteBulanPoin;
-  const totalDevaluasiBulanKupon = bulanTotal.devaluasi_kupon || 0;
+  const grossBulanBelanjaKupon = outletSummaries.reduce((acc, o) => acc + (o.kupon_seharusnya || 0), 0);
   const grossBulanPoin = (bulanTotal.poin + (bulanTotal.devaluasi_poin || 0)) + grossWasteBulanPoin;
+  const totalDevaluasiBulanPoin = isMonthSuspended ? grossBulanPoin : ((bulanTotal.devaluasi_poin || 0) + devaluasiWasteBulanPoin);
+  const totalDevaluasiBulanKupon = isMonthSuspended ? grossBulanBelanjaKupon : (bulanTotal.devaluasi_kupon || 0);
 
   const sebelumnyaKumulatifPoin = Math.max(
     grossCumPoin + grossWasteCumPoin,
@@ -599,19 +614,20 @@ export function buildStatementData(identityId: string, bulan: string): Statement
 
     const monthWastePoin = mIsSuspended ? 0 : rawMonthWastePoin;
     const mDevaluasiWastePoin = mIsSuspended ? rawMonthWastePoin : 0;
-    const mDevaluasiPoin = mDevaluasiBelanjaPoin + mDevaluasiWastePoin;
+    const mDevaluasiPoin = mIsSuspended ? (mGrossPoin + rawMonthWastePoin) : (mDevaluasiBelanjaPoin + mDevaluasiWastePoin);
+    const mDevaluasiKuponVal = mIsSuspended ? mGrossKupon : mDevaluasiKupon;
 
     return {
       no: idx + 1,
       bulan: m,
       label: bulanLabel(m),
       total_transaksi: mTotalTransaksi,
-      poin: mActualPoin + monthWastePoin,
+      poin: mIsSuspended ? 0 : (mActualPoin + monthWastePoin),
       bonus_poin: 0,  // Fase berikutnya (PRD 5)
-      kupon: mActualKupon,
+      kupon: mIsSuspended ? 0 : mActualKupon,
       is_suspended: mIsSuspended,
       devaluasi_poin: mDevaluasiPoin,
-      devaluasi_kupon: mDevaluasiKupon,
+      devaluasi_kupon: mDevaluasiKuponVal,
       waste_rupiah: monthWaste?.total_rupiah ?? 0,
       waste_kg: monthWaste?.berat_kg ?? 0,
       waste_poin: monthWastePoin,
@@ -633,13 +649,13 @@ export function buildStatementData(identityId: string, bulan: string): Statement
     bulan,
     bulan_label: bulanLabel(bulan),
     bulan_transaksi: bulanTotal.transaksi,
-    bulan_belanja_poin: bulanTotal.poin,
+    bulan_belanja_poin: isMonthSuspended ? 0 : bulanTotal.poin,
     bulan_poin: isMonthSuspended ? 0 : (bulanTotal.poin + wasteBulanPoin),
     gross_bulan_poin: grossBulanPoin,
     gross_waste_bulan_poin: grossWasteBulanPoin,
     devaluasi_waste_bulan_poin: devaluasiWasteBulanPoin,
     bulan_bonus_poin: 0,
-    bulan_kupon: bulanTotal.kupon,
+    bulan_kupon: isMonthSuspended ? 0 : bulanTotal.kupon,
     kumulatif_poin: netKumulatifPoin,
     kumulatif_kupon: netKumulatifKupon,
     transaksi_terakhir: kumulatifRow?.transaksi_terakhir ?? null,
