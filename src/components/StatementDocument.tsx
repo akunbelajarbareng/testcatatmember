@@ -78,6 +78,7 @@ export default function StatementDocument({
     total_hemat_parkir = 0,
     total_hemat_kurir = 0,
     total_nilai_penghematan = 0,
+    kupon_detail,
   } = data;
 
   const isDevaluedAccount = Boolean(
@@ -486,13 +487,121 @@ export default function StatementDocument({
               </div>
             </div>
 
-            {/* Signature Block (Halaman 1) */}
-            <div className="flex justify-end mt-4 pr-6">
-              <div className="w-56 text-center text-[12px]">
-                <p className="font-semibold text-slate-700 mb-10">Diterima oleh,</p>
-                <div className="border-b border-slate-800 w-full mb-1"></div>
-                <p className="font-bold uppercase text-slate-900">{nama_pemilik || "Customer"}</p>
+            {/* Keterangan Nomor Kupon Undian Resmi (Opsi A) */}
+            <div className="border border-slate-300 rounded p-2.5 bg-slate-50/80 mb-3">
+              <div className="flex items-center justify-between pb-1.5 mb-1.5 border-b border-slate-200">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-slate-800 flex items-center gap-1">
+                    <span>🎟️</span> KETERANGAN NOMOR KUPON UNDIAN BULAN INI
+                  </span>
+                  <span className="text-[9px] text-slate-500 font-medium">
+                    (Periode: {bulan_label})
+                  </span>
+                </div>
+                <div className="text-[9.5px] font-bold text-amber-900 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded font-mono">
+                  {kupon_detail && kupon_detail.total_fisik_aktif > 0
+                    ? `${fmt(kupon_detail.total_fisik_aktif)} Lembar Terdaftar`
+                    : bulan_kupon > 0
+                    ? `Hak: ${fmt(bulan_kupon)} Lembar`
+                    : "0 Lembar"}
+                </div>
               </div>
+
+              {/* Konten Rincian Kupon */}
+              {kupon_detail && kupon_detail.total_fisik_aktif > 0 ? (
+                <div className="space-y-1.5">
+                  {/* Mode 1: <= 10 lembar -> tampilkan lengkap */}
+                  {kupon_detail.format_mode === "full" && (
+                    <div>
+                      <div className="text-[9px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                        Daftar Nomor Kupon Fisik ({fmt(kupon_detail.total_fisik_aktif)} Lembar):
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {kupon_detail.items.map((k) => (
+                          <span
+                            key={k.nomor_kupon}
+                            className="bg-white text-slate-900 border border-amber-300 shadow-2xs font-mono font-bold text-[9.5px] px-2 py-0.5 rounded"
+                          >
+                            {k.nomor_kupon}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Mode 2: > 10 lembar -> rentang berurutan + pecahan */}
+                  {kupon_detail.format_mode === "range_and_singles" && (
+                    <div className="space-y-1.5">
+                      {/* Rentang Berurutan */}
+                      {kupon_detail.ranges.length > 0 && (
+                        <div className="space-y-1">
+                          <div className="text-[9px] font-bold uppercase tracking-wider text-slate-500 mb-0.5">
+                            Rentang Kupon Berurutan:
+                          </div>
+                          {kupon_detail.ranges.map((r, i) => (
+                            <div
+                              key={i}
+                              className="flex items-center justify-between text-[10px] bg-white border border-slate-200 rounded px-2.5 py-1"
+                            >
+                              <span className="font-mono font-bold text-slate-900">
+                                {r.start}{" "}
+                                <span className="text-slate-500 font-sans font-normal mx-1">
+                                  s/d
+                                </span>{" "}
+                                {r.end}
+                              </span>
+                              <span className="font-semibold text-amber-800 text-[9.5px]">
+                                ({fmt(r.count)} Lembar Berurutan)
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Kode Kupon Pecahan */}
+                      {kupon_detail.pecahan.length > 0 && (
+                        <div className={kupon_detail.ranges.length > 0 ? "pt-1 border-t border-slate-200" : ""}>
+                          <div className="text-[9px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                            Kode Kupon Pecahan ({fmt(kupon_detail.pecahan.length)} Lembar):
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {kupon_detail.pecahan.map((pk, idx) => (
+                              <span
+                                key={idx}
+                                className="bg-white text-slate-900 border border-amber-300 font-mono font-bold text-[9px] px-1.5 py-0.5 rounded"
+                              >
+                                {pk}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Catatan jika hak akumulasi lebih besar dari yang sudah diambil */}
+                  {bulan_kupon > kupon_detail.total_fisik_aktif && (
+                    <p className="text-[9px] text-amber-700 italic mt-1 leading-tight">
+                      *Catatan: Dari hak akumulasi {fmt(bulan_kupon)} lembar periode ini, sebanyak{" "}
+                      {fmt(bulan_kupon - kupon_detail.total_fisik_aktif)} lembar belum diserah-terimakan di kasir.
+                    </p>
+                  )}
+                </div>
+              ) : bulan_kupon > 0 ? (
+                <div className="text-[9.5px] text-amber-800 italic bg-amber-50/70 p-2 rounded border border-amber-200 flex items-center justify-between">
+                  <span>
+                    ⚠️ Kupon fisik belum diserah-terimakan di kasir pada periode ini (Hak Member:{" "}
+                    <strong>{fmt(bulan_kupon)} Lembar</strong>).
+                  </span>
+                  <span className="text-[9px] text-amber-900 font-semibold bg-white px-1.5 py-0.5 rounded border border-amber-300">
+                    Belum Diambil
+                  </span>
+                </div>
+              ) : (
+                <div className="text-[9.5px] text-slate-500 italic">
+                  Tidak ada perolehan kupon undian fisik pada periode ini.
+                </div>
+              )}
             </div>
           </div>
 

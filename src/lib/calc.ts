@@ -102,6 +102,24 @@ export interface StatementData {
   total_hemat_parkir: number;
   total_hemat_kurir: number;
   total_nilai_penghematan: number;
+  // Detail Nomor Kupon Fisik Resmi (Opsi A)
+  kupon_detail?: StatementCouponDetail;
+}
+
+export interface StatementCouponDetail {
+  total_fisik_aktif: number;
+  items: Array<{
+    nomor_kupon: string;
+    nomor_urut: number;
+    tanggal_serah?: string;
+  }>;
+  ranges: Array<{
+    start: string;
+    end: string;
+    count: number;
+  }>;
+  pecahan: string[];
+  format_mode: 'empty' | 'full' | 'range_and_singles';
 }
 
 export interface MonthlyHistory {
@@ -638,6 +656,96 @@ export function buildStatementData(identityId: string, bulan: string): Statement
     ? '*Pemberian Poin & Kupon dinonaktifkan sementara (Status Evaluasi Khusus)'
     : null;
 
+  // ---------------------------------------------------------------------------
+  // Kupon Fisik Yang Diserahkan pada Periode Bulan Ini (Opsi A)
+  // ---------------------------------------------------------------------------
+  const couponsDb = db
+    .prepare(`
+      SELECT nomor_kupon, nomor_urut, tanggal_serah
+      FROM coupons
+      WHERE identity_id = ?
+        AND (periode_kupon = ? OR strftime('%Y-%m', tanggal_serah) = ?)
+        AND status = 'aktif'
+      ORDER BY nomor_urut ASC
+    `)
+    .all(identityId, bulan, bulan) as Array<{
+      nomor_kupon: string;
+      nomor_urut: number;
+      tanggal_serah?: string;
+    }>;
+
+  const totalFisik = couponsDb.length;
+  let kuponDetail: StatementCouponDetail;
+
+  if (totalFisik === 0) {
+    kuponDetail = {
+      total_fisik_aktif: 0,
+      items: [],
+      ranges: [],
+      pecahan: [],
+      format_mode: 'empty',
+    };
+  } else if (totalFisik <= 10) {
+    kuponDetail = {
+      total_fisik_aktif: totalFisik,
+      items: couponsDb,
+      ranges: [],
+      pecahan: couponsDb.map((c) => c.nomor_kupon),
+      format_mode: 'full',
+    };
+  } else {
+    // Kelompokkan nomor urut yang berurutan kontigu
+    const runs: Array<{ start: string; end: string; count: number; items: string[] }> = [];
+    let currentRun: Array<{ nomor_kupon: string; nomor_urut: number }> = [couponsDb[0]];
+
+    for (let i = 1; i < couponsDb.length; i++) {
+      const prev = couponsDb[i - 1];
+      const curr = couponsDb[i];
+      if (curr.nomor_urut === prev.nomor_urut + 1) {
+        currentRun.push(curr);
+      } else {
+        runs.push({
+          start: currentRun[0].nomor_kupon,
+          end: currentRun[currentRun.length - 1].nomor_kupon,
+          count: currentRun.length,
+          items: currentRun.map((c) => c.nomor_kupon),
+        });
+        currentRun = [curr];
+      }
+    }
+    if (currentRun.length > 0) {
+      runs.push({
+        start: currentRun[0].nomor_kupon,
+        end: currentRun[currentRun.length - 1].nomor_kupon,
+        count: currentRun.length,
+        items: currentRun.map((c) => c.nomor_kupon),
+      });
+    }
+
+    const ranges: Array<{ start: string; end: string; count: number }> = [];
+    const pecahan: string[] = [];
+
+    for (const r of runs) {
+      if (r.count >= 3) {
+        ranges.push({
+          start: r.start,
+          end: r.end,
+          count: r.count,
+        });
+      } else {
+        pecahan.push(...r.items);
+      }
+    }
+
+    kuponDetail = {
+      total_fisik_aktif: totalFisik,
+      items: couponsDb,
+      ranges,
+      pecahan,
+      format_mode: 'range_and_singles',
+    };
+  }
+
   return {
     identity_id: identityId,
     nama_pemilik: identity.nama_pemilik,
@@ -689,6 +797,7 @@ export function buildStatementData(identityId: string, bulan: string): Statement
     total_hemat_parkir: totalHematParkir,
     total_hemat_kurir: totalHematKurir,
     total_nilai_penghematan: totalNilaiPenghematan,
+    kupon_detail: kuponDetail,
   };
 }
 

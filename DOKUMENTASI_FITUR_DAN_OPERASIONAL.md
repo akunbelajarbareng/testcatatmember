@@ -53,8 +53,11 @@ Komponen cetak presisi pada [`StatementDocument.tsx`](file:///c:/01.%20Chandra/0
   - Header resmi Oriental + Periode bulan berjalan.
   - Banner peringatan status: `STATUS : SUSPEND/DEVALUASI AKUN` jika akun terkena evaluasi.
   - 4 Kartu KPI: Total Poin Bulan Berjalan, Total Poin Dimiliki, Total Kupon Bulan Berjalan, Total Kupon Dimiliki.
-  - Callout Box Peringatan Resmi bertanda tangan *Management*.
-  - Rincian akumulasi per-outlet dan catatan kaki operasional.
+  - Callout Box Peringatan Resmi bertanda tangan *Management* (jika akun devaluasi).
+  - Rincian akumulasi per-outlet dan 2 kartu sorotan manfaat finansial (Penghematan Belanja & Pendapatan Limbah UCO).
+  - **Keterangan Nomor Kupon Undian Resmi**: Rincian nomor seri kupon fisik aktif (Opsi A). Ditampilkan lengkap jika $\le 10$ lembar, atau diringkas dengan rentang berurutan (`ORT-KUP... s/d ORT-KUP...`) plus kode kupon pecahan jika $> 10$ lembar.
+  - **Tanpa Blok Tanda Tangan**: Blok tanda tangan customer ditiadakan agar lembar customer bersih (*clean*) dan presisi A4 tetap terjaga.
+  - Catatan kaki operasional sistem.
 - **Halaman 2 (Internal Audit & Arsip Akuntansi)**:
   - Subtitle: `ARSIP & RIWAYAT TRANSAKSI 13 BULAN (INTERNAL AUDIT)`.
   - Badge: `STATUS EVALUASI KHUSUS`.
