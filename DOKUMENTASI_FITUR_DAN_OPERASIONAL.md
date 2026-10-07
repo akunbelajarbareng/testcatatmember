@@ -35,9 +35,21 @@ Dokumen ini memuat rangkuman menyeluruh mengenai seluruh pekerjaan pengembangan,
 - **Kalkulasi Pembulatan ke Bawah (`Math.floor`)**: Transaksi tidak digabung antar-faktur untuk mencegah manipulasi pecahan.
 
 ### D. Manajemen Kupon Undian & Nomor Seri (`/coupons`)
-- **Generator Nomor Seri Acak**: Nomor kupon dibuat acak anti-tebak berdasar algoritma kriptografis (`crypto.randomInt`).
-- **Pelacakan Fisik & Serah Terima**: Menu pencatatan serah terima fisik kupon (*Handover*) kepada pelanggan dengan nomor batch dan tanggal distribusi.
-- **Lookup Kupon**: Fasilitas pencarian status keabsahan kupon (Aktif / Digunakan / Void) secara instan.
+- **Format Baku Standar**: Format nomor kupon fisik resmi adalah **`ORT-KUPYYMM-NNNN`** (contoh: `ORT-KUP2609-0001` untuk September 2026, `ORT-KUP2610-0001` untuk Oktober 2026).
+- **Standar Kapasitas Bulanan**: Ditetapkan 2.500 kupon per bulan (terbagi dalam 50 bundel resmi @ 50 lembar kupon).
+- **Mode Fleksibel Serah Terima Fisik (Handover)**:
+  1. *Mode Bundel*: Memilih nomor bundel (1 s/d 50).
+  2. *Mode Rentang (Range)*: Memasukkan nomor urut awal dan nomor urut akhir (misal 1 s/d 24).
+  3. *Mode Pecahan (Custom)*: Memasukkan nomor-nomor urut eceran (misal 5, 12, 88).
+- **Validasi Anti-Duplikasi & Hak Kuota**:
+  - Kuota kupon member dihitung kumulatif dari seluruh transaksi aktif sejak program dimulai (1 Sep 2026) dikurangi kupon yang sudah pernah diserah-terimakan.
+  - Sistem menolak penyerahan jika melebihi sisa kuota member atau jika nomor kupon sudah berstatus aktif digunakan member lain.
+- **Dukungan Serah Terima Lintas Periode Stok (Cross-Period Booklet Handover)**:
+  - Mengakomodasi operasional riil di mana pelanggan berhak atas kupon dari transaksi bulan tertentu (misal belanja September), namun serah-terima fisik dilakukan pada bulan berikutnya (Oktober) menggunakan bundel kupon fisik bulan berjalan (`ORT-KUP2610-XXXX`).
+  - Kupon fisik aktif yang diserahkan tetap diakui sah dan otomatis terhubung ke perhitungan hak statement pelanggan.
+- **Lookup & Pelacakan Doorprize**:
+  - Fasilitas pencarian instan pemilik kupon berdasarkan nomor seri utuh (`ORT-KUP2609-0001`), prefix pendek (`2609-0001`), maupun nomor urut angka (`1`).
+  - Menampilkan nama pemenang, kontak WhatsApp, toko/outlet asal, tanggal serah terima, dan nama kasir petugas yang menyerahkan.
 
 ### E. Modul Sanksi Pelanggaran & Devaluasi Akun (`/penalties`)
 - **Penjatuhan Sanksi (Penalty Application)**:
@@ -49,23 +61,38 @@ Dokumen ini memuat rangkuman menyeluruh mengenai seluruh pekerjaan pengembangan,
 
 ### F. Dokumen E-Statement 2 Halaman (Sesuai Standar Audit & Cetak A4)
 Komponen cetak presisi pada [`StatementDocument.tsx`](file:///c:/01.%20Chandra/01.%20Project%20Vibe%20Code/03.%20Mini%20Webapp%20Untuk%20CRM%20cetak%20Statement/src/components/StatementDocument.tsx):
-- **Halaman 1 (Customer Facing)**:
-  - Header resmi Oriental + Periode bulan berjalan.
-  - Banner peringatan status: `STATUS : SUSPEND/DEVALUASI AKUN` jika akun terkena evaluasi.
-  - 4 Kartu KPI: Total Poin Bulan Berjalan, Total Poin Dimiliki, Total Kupon Bulan Berjalan, Total Kupon Dimiliki.
-  - Callout Box Peringatan Resmi bertanda tangan *Management* (jika akun devaluasi).
-  - Rincian akumulasi per-outlet dan 2 kartu sorotan manfaat finansial (Penghematan Belanja & Pendapatan Limbah UCO).
-  - **Keterangan Nomor Kupon Undian Resmi**: Rincian nomor seri kupon fisik aktif (Opsi A). Ditampilkan lengkap jika $\le 10$ lembar, atau diringkas dengan rentang berurutan (`ORT-KUP... s/d ORT-KUP...`) plus kode kupon pecahan jika $> 10$ lembar.
-  - **Tanpa Blok Tanda Tangan**: Blok tanda tangan customer ditiadakan agar lembar customer bersih (*clean*) dan presisi A4 tetap terjaga.
-  - Catatan kaki operasional sistem.
+- **Halaman 1 (Customer Facing — Lembar Resmi Pelanggan)**:
+  - **Header Resmi & Periode**: Logo Oriental, judul dokumen resmi, identitas periode bulan berjalan (`SEPTEMBER 2026`), dan badge status (`FINAL / DRAFT`).
+  - **Profil Pelanggan**: Nama pemilik, alamat outlet, kecamatan, kota, kode pos, provinsi, dan nomor Oriental One Identity (`102-YYMMDD-NN`).
+  - **4 Kartu Ringkasan KPI**:
+    1. *Total Point Bulan Berjalan*: Poin belanja POS + reward poin waste UCO (jika ada).
+    2. *Total Point Yang Dimiliki*: Akumulasi poin aktif terverifikasi s.d. tanggal transaksi terakhir.
+    3. *Total Kupon Bulan Berjalan*: Lembar kupon yang berhak diperoleh bulan ini.
+    4. *Total Kupon Yang Dimiliki*: Akumulasi lembar kupon yang dimiliki s.d. tanggal transaksi terakhir.
+  - **Banner Peringatan Khusus**: Muncul secara otomatis jika akun terkena evaluasi khusus/devaluasi sanksi (`STATUS : SUSPEND/DEVALUASI AKUN`).
+  - **Tabel Rekapan Bulanan**: Rincian per-outlet (ID Outlet, Nama Outlet, Total Transaksi, Point, Kupon).
+  - **Dua Kartu Sorotan Manfaat Finansial**:
+    1. *Nilai Penghematan Belanja*: Estimasi penghematan biaya parkir dan subsidi ongkir kurir berdasar jumlah nota transaksi.
+    2. *Pendapatan Limbah (UCO)*: Total Kg minyak jelantah, nilai tunai yang diterima, serta bonus poin Oriental.
+  - **Keterangan Nomor Kupon Undian Resmi (Opsi A — Serah Terima Fisik)**:
+    - Menampilkan bukti sah nomor seri kupon undian yang telah diserah-terimakan oleh kasir:
+      - **Jika $\le 10$ Lembar (Tampil Lengkap)**: Ditampilkan seluruh kode seri kupon sebagai badge rapi (`[ORT-KUP2610-0843]`, `[ORT-KUP2610-0844]`, dst).
+      - **Jika $> 10$ Lembar (Rentang Berurutan & Pecahan)**:
+        - *Rentang Berurutan*: Nomor seri kupon dengan prefix dan urutan kontigu diringkas rapi: `ORT-KUP2610-0843 s/d ORT-KUP2610-0850 (8 Lembar Berurutan)`.
+        - *Kode Kupon Pecahan*: Nomor seri kupon eceran/terpisah ditampilkan kodenya secara lengkap di bawah baris rentang.
+      - *Status Kupon Belum Diambil*: Jika pelanggan berhak atas kupon namun belum melakukan serah-terima di kasir, muncul keterangan informatif: `⚠️ Kupon fisik belum diserah-terimakan di kasir pada periode ini (Hak Member: X Lembar)`.
+      - *Status Sebagian Diambil*: Jika baru sebagian diambil, tertera catatan sisa lembar hak yang belum diserahkan.
+  - **Penghapusan Blok Tanda Tangan Customer**: Blok tanda tangan pada Halaman 1 ditiadakan agar lembar customer bersih (*clean*), formal sebagai lembar informasi, dan menghemat ruang vertikal 80px sehingga terbebas dari risiko terpotong pada batas cetak kertas A4.
+  - **Catatan Kaki Operasional**: Keterangan evaluasi otomatis sistem.
 - **Halaman 2 (Internal Audit & Arsip Akuntansi)**:
   - Subtitle: `ARSIP & RIWAYAT TRANSAKSI 13 BULAN (INTERNAL AUDIT)`.
-  - Badge: `STATUS EVALUASI KHUSUS`.
+  - Badge: `STATUS EVALUASI KHUSUS` (jika akun dalam masa sanksi).
   - KPI Box dengan rincian potensi vs penalti: `(Potensi: XX − Penalti: XX)` dan badge `DIBEKUKAN`.
   - **Tabel 1 (Riwayat 13 Bulan)**: Baris bulan terkena sanksi disorot latar merah muda (`#fef2f2`) dengan badge `[SANKSI VOID]` dan nilai `0 [VOID XX]`, serta total baris **`TOTAL AKUMULASI DIAKUI`**.
   - **Tabel 2 (Rekapan Status Outlet)**: Menampilkan rincian status per-outlet `0 [VOID: XX]`, sementara omzet belanja faktur tetap utuh apa adanya.
+  - **Tabel 3 (Rekapitulasi Limbah UCO)**: Arsip pencatatan pembelian minyak jelantah per outlet jika ada transaksi waste pada periode tersebut.
   - **Klausul Berita Acara Legal**: Kotak `BERITA ACARA AUDIT & PENGESAHAN SALDO`.
-  - **Dual Signature Block**: Kolom tanda tangan ganda untuk `MANAGEMENT` dan `CUSTOMER`.
+  - **Dual Signature Block**: Kolom tanda tangan resmi ganda untuk `MANAGEMENT` dan `CUSTOMER` untuk arsip audit internal fisik.
 
 ### G. Keamanan & Multi-Role User
 - **Role Admin / Owner**: Hak akses tak terbatas (Master data, pembatalan/void, penjatuhan sanksi, ubah pengaturan).
