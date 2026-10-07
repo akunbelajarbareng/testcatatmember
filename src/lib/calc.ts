@@ -659,20 +659,49 @@ export function buildStatementData(identityId: string, bulan: string): Statement
   // ---------------------------------------------------------------------------
   // Kupon Fisik Yang Diserahkan pada Periode Bulan Ini (Opsi A)
   // ---------------------------------------------------------------------------
-  const couponsDb = db
+  let couponsDb = db
     .prepare(`
-      SELECT nomor_kupon, nomor_urut, tanggal_serah
+      SELECT nomor_kupon, nomor_urut, periode_kupon, tanggal_serah
       FROM coupons
       WHERE identity_id = ?
         AND (periode_kupon = ? OR strftime('%Y-%m', tanggal_serah) = ?)
         AND status = 'aktif'
-      ORDER BY nomor_urut ASC
+      ORDER BY periode_kupon ASC, nomor_urut ASC
     `)
     .all(identityId, bulan, bulan) as Array<{
       nomor_kupon: string;
       nomor_urut: number;
+      periode_kupon?: string;
       tanggal_serah?: string;
     }>;
+
+  // Jika tidak ditemukan kupon dengan periode_kupon/tanggal_serah persis bulan tersebut,
+  // namun member memiliki kupon aktif di sistem (misal serah terima menggunakan stok fisik
+  // bulan berjalan seperti kupon ORT-KUP2610 yang diserahkan di bulan Oktober untuk hak belanja September):
+  if (couponsDb.length === 0 && (bulanTotal.kupon > 0 || netKumulatifKupon > 0)) {
+    const allActive = db
+      .prepare(`
+        SELECT nomor_kupon, nomor_urut, periode_kupon, tanggal_serah
+        FROM coupons
+        WHERE identity_id = ?
+          AND status = 'aktif'
+        ORDER BY periode_kupon ASC, nomor_urut ASC
+      `)
+      .all(identityId) as Array<{
+        nomor_kupon: string;
+        nomor_urut: number;
+        periode_kupon?: string;
+        tanggal_serah?: string;
+      }>;
+
+    if (allActive.length > 0) {
+      if (netKumulatifKupon > 0 && allActive.length > netKumulatifKupon) {
+        couponsDb = allActive.slice(0, netKumulatifKupon);
+      } else {
+        couponsDb = allActive;
+      }
+    }
+  }
 
   const totalFisik = couponsDb.length;
   let kuponDetail: StatementCouponDetail;
@@ -696,12 +725,15 @@ export function buildStatementData(identityId: string, bulan: string): Statement
   } else {
     // Kelompokkan nomor urut yang berurutan kontigu
     const runs: Array<{ start: string; end: string; count: number; items: string[] }> = [];
-    let currentRun: Array<{ nomor_kupon: string; nomor_urut: number }> = [couponsDb[0]];
+    let currentRun: Array<{ nomor_kupon: string; nomor_urut: number; periode_kupon?: string }> = [couponsDb[0]];
 
     for (let i = 1; i < couponsDb.length; i++) {
       const prev = couponsDb[i - 1];
       const curr = couponsDb[i];
-      if (curr.nomor_urut === prev.nomor_urut + 1) {
+      const isConsecutive =
+        curr.nomor_urut === prev.nomor_urut + 1 &&
+        (curr.periode_kupon === prev.periode_kupon || curr.nomor_kupon.slice(0, 11) === prev.nomor_kupon.slice(0, 11));
+      if (isConsecutive) {
         currentRun.push(curr);
       } else {
         runs.push({
