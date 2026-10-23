@@ -19,7 +19,7 @@ Aplikasi **Oriental CRM Customer Statement** telah berhasil dideploy dan berjala
 | Peran (Role) | Username | Password Default | Catatan |
 |---|---|---|---|
 | **Administrator (Owner)** | `admin` | `oriental2026` | Hak akses penuh: Master data, cleanse, kupon, persetujuan, settings |
-| **Petugas CRM / Kasir** | `kasir` | `kasir123` | Hak akses operasional: Input data, lookup kupon, cetak statement |
+| **Petugas CRM / Kasir** | `kasir` | `kasir2026` | Hak akses operasional: Input data, lookup kupon, cetak statement |
 
 > [!NOTE]
 > Semua password disimpan menggunakan hashing aman standar industri (**scrypt** + random salt).

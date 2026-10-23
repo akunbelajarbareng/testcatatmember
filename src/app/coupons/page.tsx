@@ -83,6 +83,10 @@ interface CouponRow {
   nama_outlet: string;
   outlet_tipe: string;
   batch_keterangan?: string;
+  tipe_penerima?: "member" | "walk_in";
+  nama_walk_in?: string | null;
+  no_hp_walk_in?: string | null;
+  no_invoice?: string | null;
 }
 
 interface LookupResult {
@@ -98,6 +102,10 @@ interface LookupResult {
     tanggal_serah: string;
     petugas: string;
     whatsapp: string;
+    tipe_penerima?: "member" | "walk_in";
+    nama_walk_in?: string | null;
+    no_hp_walk_in?: string | null;
+    no_invoice?: string | null;
     member: {
       id: string;
       nama_pemilik: string;
@@ -139,10 +147,10 @@ function CouponsContent() {
   const initialMemberId = searchParams.get("memberId") || "";
   const initialPeriode = searchParams.get("periode") || "2026-09";
 
-  const [activeTab, setActiveTab] = useState<"handover" | "lookup" | "history">("handover");
+  const [activeTab, setActiveTab] = useState<"handover" | "walkin" | "lookup" | "history">("handover");
 
   // -------------------------------------------------------------------------
-  // TAB 1: HANDOVER STATE
+  // TAB 1: HANDOVER STATE (MEMBER)
   // -------------------------------------------------------------------------
   const [memberQuery, setMemberQuery] = useState("");
   const [memberResults, setMemberResults] = useState<Array<{ id: string; nama_pemilik: string; kota: string }>>([]);
@@ -173,24 +181,55 @@ function CouponsContent() {
   const [handoverMsg, setHandoverMsg] = useState<{ type: "success" | "error"; text: string; details?: any } | null>(null);
 
   // -------------------------------------------------------------------------
-  // TAB 2: LOOKUP STATE
+  // TAB 2: WALK-IN CASH STATE (NON-MEMBER / SOBEKAN KASIR)
+  // -------------------------------------------------------------------------
+  const [walkinPeriode, setWalkinPeriode] = useState(initialPeriode);
+  const [walkinNama, setWalkinNama] = useState("");
+  const [walkinHp, setWalkinHp] = useState("");
+  const [walkinInvoice, setWalkinInvoice] = useState("");
+  const [walkinPetugas, setWalkinPetugas] = useState("");
+  const [walkinMode, setWalkinMode] = useState<"range" | "custom">("range");
+  const [walkinStart, setWalkinStart] = useState<number | "">("");
+  const [walkinEnd, setWalkinEnd] = useState<number | "">("");
+  const [walkinCustom, setWalkinCustom] = useState("");
+  const [walkinKeterangan, setWalkinKeterangan] = useState("");
+  const [walkinSubmitting, setWalkinSubmitting] = useState(false);
+  const [walkinMsg, setWalkinMsg] = useState<{ type: "success" | "error"; text: string; details?: any } | null>(null);
+
+  interface WalkInSessionItem {
+    id: string;
+    timestamp: string;
+    nama: string;
+    hp: string;
+    invoice: string;
+    periode: string;
+    totalKupon: number;
+    nomorAwal: string;
+    nomorAkhir: string;
+    petugas: string;
+  }
+  const [walkinSessionFeed, setWalkinSessionFeed] = useState<WalkInSessionItem[]>([]);
+
+  // -------------------------------------------------------------------------
+  // TAB 3: LOOKUP STATE
   // -------------------------------------------------------------------------
   const [lookupQuery, setLookupQuery] = useState("");
   const [isLookingUp, setIsLookingUp] = useState(false);
   const [lookupResult, setLookupResult] = useState<LookupResult | null>(null);
 
   // -------------------------------------------------------------------------
-  // TAB 3: HISTORY STATE
+  // TAB 4: HISTORY STATE
   // -------------------------------------------------------------------------
   const [historyCoupons, setHistoryCoupons] = useState<CouponRow[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historySearch, setHistorySearch] = useState("");
   const [historyPeriode, setHistoryPeriode] = useState("");
   const [historyStatus, setHistoryStatus] = useState("all");
+  const [historyTipe, setHistoryTipe] = useState("all"); // 'all' | 'member' | 'walk_in'
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
-  const [historyStats, setHistoryStats] = useState({ total_aktif: 0, total_void: 0, total_member: 0, total_batches: 0 });
+  const [historyStats, setHistoryStats] = useState({ total_aktif: 0, total_void: 0, total_walkin: 0, total_member: 0, total_batches: 0 });
 
   // -------------------------------------------------------------------------
   // VOID MODAL STATE
@@ -289,6 +328,7 @@ function CouponsContent() {
         q: historySearch,
         periode: historyPeriode,
         status: historyStatus,
+        tipe: historyTipe,
       });
       const res = await fetch(`/api/coupons?${q.toString()}`);
       const data = await res.json();
@@ -303,7 +343,7 @@ function CouponsContent() {
     } finally {
       setHistoryLoading(false);
     }
-  }, [page, historySearch, historyPeriode, historyStatus]);
+  }, [page, historySearch, historyPeriode, historyStatus, historyTipe]);
 
   useEffect(() => {
     if (activeTab === "history") {
@@ -446,6 +486,118 @@ function CouponsContent() {
       setHandoverMsg({ type: "error", text: "Terjadi gangguan jaringan saat memproses kupon" });
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  // -------------------------------------------------------------------------
+  // HANDLE WALK-IN SUBMIT (SOBEKAN FISIK KASIR)
+  // -------------------------------------------------------------------------
+  const handleWalkInSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setWalkinMsg(null);
+
+    if (!walkinNama.trim()) {
+      setWalkinMsg({ type: "error", text: "Nama pelanggan / pembeli cash wajib diisi" });
+      return;
+    }
+    if (!walkinPetugas.trim()) {
+      setWalkinMsg({ type: "error", text: "Nama kasir / petugas wajib diisi" });
+      return;
+    }
+
+    let rangePayload: { start: number; end: number } | undefined;
+    let customPayload: number[] | undefined;
+
+    if (walkinMode === "range") {
+      const s = Number(walkinStart);
+      const eNum = Number(walkinEnd !== "" ? walkinEnd : walkinStart);
+      if (!s || s <= 0 || !eNum || eNum <= 0) {
+        setWalkinMsg({ type: "error", text: "Nomor urut kupon awal wajib diisi bilangan positif (1 - 2500)" });
+        return;
+      }
+      if (s > eNum) {
+        setWalkinMsg({ type: "error", text: `Nomor awal (${s}) tidak boleh lebih besar dari nomor akhir (${eNum})` });
+        return;
+      }
+      rangePayload = { start: s, end: eNum };
+    } else {
+      const parsed = walkinCustom
+        .split(/[\s,;]+/)
+        .map((x) => parseInt(x.trim(), 10))
+        .filter((n) => !isNaN(n) && n > 0);
+      if (parsed.length === 0) {
+        setWalkinMsg({ type: "error", text: "Masukkan minimal satu nomor urut kupon eceran" });
+        return;
+      }
+      customPayload = parsed;
+    }
+
+    setWalkinSubmitting(true);
+
+    try {
+      const res = await fetch("/api/coupons/walk-in", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          periode_kupon: walkinPeriode,
+          nama_walk_in: walkinNama.trim(),
+          no_hp_walk_in: walkinHp.trim() || undefined,
+          no_invoice: walkinInvoice.trim() || undefined,
+          petugas: walkinPetugas.trim(),
+          keterangan: walkinKeterangan.trim() || undefined,
+          mode: walkinMode,
+          range: rangePayload,
+          custom_numbers: customPayload,
+        }),
+      });
+
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        setWalkinMsg({ type: "error", text: json.error || "Gagal memproses kupon walk-in" });
+      } else {
+        setWalkinMsg({
+          type: "success",
+          text: `Berhasil! ${json.data.total_issued} kupon (${json.data.nomor_awal} s.d. ${json.data.nomor_akhir}) terdaftar atas nama ${walkinNama.trim()}. Sobekan fisik siap dicap & dimasukkan ke Kotak Undian!`,
+          details: json.data,
+        });
+
+        // Add to session feed
+        const newItem: WalkInSessionItem = {
+          id: `${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          timestamp: new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+          nama: walkinNama.trim(),
+          hp: walkinHp.trim() || "—",
+          invoice: walkinInvoice.trim() || "—",
+          periode: walkinPeriode,
+          totalKupon: json.data.total_issued,
+          nomorAwal: json.data.nomor_awal,
+          nomorAkhir: json.data.nomor_akhir,
+          petugas: walkinPetugas.trim(),
+        };
+        setWalkinSessionFeed((prev) => [newItem, ...prev]);
+
+        // Reset fields for the next stub while keeping petugas & periode for rapid typing
+        setWalkinNama("");
+        setWalkinHp("");
+        setWalkinInvoice("");
+        setWalkinStart("");
+        setWalkinEnd("");
+        setWalkinCustom("");
+        setWalkinKeterangan("");
+
+        // Auto focus back to nama input
+        setTimeout(() => {
+          const el = document.getElementById("walkin-nama-input");
+          if (el) el.focus();
+        }, 100);
+
+        // Reload stock so stock counter updates
+        loadStock(walkinPeriode);
+      }
+    } catch {
+      setWalkinMsg({ type: "error", text: "Terjadi gangguan jaringan saat memproses kupon walk-in" });
+    } finally {
+      setWalkinSubmitting(false);
     }
   };
 
@@ -597,7 +749,31 @@ function CouponsContent() {
             marginBottom: -2,
           }}
         >
-          <Ticket size={16} /> Penyerahan Kupon
+          <Ticket size={16} /> Penyerahan Member
+        </button>
+
+        <button
+          onClick={() => setActiveTab("walkin")}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "10px 18px",
+            fontSize: 13,
+            fontWeight: 700,
+            cursor: "pointer",
+            background: "none",
+            border: "none",
+            borderBottom: activeTab === "walkin" ? "3px solid var(--gold-600)" : "3px solid transparent",
+            color: activeTab === "walkin" ? "var(--gold-700)" : "var(--text-muted)",
+            transition: "all 0.15s ease",
+            marginBottom: -2,
+          }}
+        >
+          <Store size={16} /> Input Kupon Cash Walk-In
+          <span style={{ fontSize: 10, background: "#E0F2FE", color: "#0369A1", padding: "1px 6px", borderRadius: 10, fontWeight: 800 }}>
+            SOBEKAN KASIR
+          </span>
         </button>
 
         <button
@@ -1338,7 +1514,397 @@ function CouponsContent() {
       )}
 
       {/* ========================================================
-          TAB 2: CEK PEMENANG UNDIAN (DOORPRIZE FINDER)
+          TAB 2: INPUT KUPON CASH WALK-IN (SOBEKAN FISIK KASIR)
+          ======================================================== */}
+      {activeTab === "walkin" && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 420px", gap: 24, alignItems: "start" }}>
+          {/* LEFT: RAPID INPUT FORM */}
+          <div className="card" style={{ padding: 24 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+              <div
+                style={{
+                  width: 38,
+                  height: 38,
+                  borderRadius: 8,
+                  background: "linear-gradient(135deg, #0284C7, #0369A1)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  color: "#fff",
+                  boxShadow: "0 4px 10px rgba(2, 132, 199, 0.25)",
+                }}
+              >
+                <Store size={20} />
+              </div>
+              <div>
+                <h2 style={{ fontSize: 16, fontWeight: 800, color: "var(--navy-950)", margin: 0 }}>
+                  Input Kupon Cash Walk-In (Non-Member)
+                </h2>
+                <p style={{ fontSize: 12, color: "var(--text-muted)", margin: 0 }}>
+                  Salin nomor seri kupon dari sobekan fisik yang di-keep kasir (transaksi tunai ≥ Rp 150.000).
+                </p>
+              </div>
+            </div>
+
+            {walkinMsg && (
+              <div
+                style={{
+                  padding: "12px 16px",
+                  borderRadius: 8,
+                  marginBottom: 20,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: 10,
+                  background: walkinMsg.type === "success" ? "var(--emerald-50)" : "var(--rose-50)",
+                  border: `1px solid ${walkinMsg.type === "success" ? "var(--emerald-200)" : "var(--rose-200)"}`,
+                  color: walkinMsg.type === "success" ? "var(--emerald-900)" : "var(--rose-900)",
+                }}
+              >
+                {walkinMsg.type === "success" ? (
+                  <CheckCircle2 size={18} className="shrink-0 text-emerald-600" />
+                ) : (
+                  <AlertTriangle size={18} className="shrink-0 text-rose-600" />
+                )}
+                <div>{walkinMsg.text}</div>
+              </div>
+            )}
+
+            <form onSubmit={handleWalkInSubmit}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--navy-900)", display: "block", marginBottom: 6 }}>
+                    Periode Kupon
+                  </label>
+                  <select
+                    className="select"
+                    value={walkinPeriode}
+                    onChange={(e) => {
+                      setWalkinPeriode(e.target.value);
+                      loadStock(e.target.value);
+                    }}
+                  >
+                    {PROGRAM_PERIODS.map((p) => (
+                      <option key={p.value} value={p.value}>
+                        {p.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--navy-900)", display: "block", marginBottom: 6 }}>
+                    Nama Kasir / Petugas Input <span style={{ color: "var(--rose-600)" }}>*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    className="input"
+                    placeholder="Contoh: Kasir Siti"
+                    value={walkinPetugas}
+                    onChange={(e) => setWalkinPetugas(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              {/* Baris Nama & HP */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--navy-900)", display: "block", marginBottom: 6 }}>
+                    Nama Pembeli (Di Sobekan) <span style={{ color: "var(--rose-600)" }}>*</span>
+                  </label>
+                  <input
+                    id="walkin-nama-input"
+                    type="text"
+                    required
+                    className="input"
+                    placeholder="Nama di sobekan (misal: Ibu Dewi)"
+                    value={walkinNama}
+                    onChange={(e) => setWalkinNama(e.target.value)}
+                    autoFocus
+                  />
+                </div>
+
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--navy-900)", display: "block", marginBottom: 6 }}>
+                    Nomor WhatsApp / HP
+                  </label>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="Contoh: 08123456789"
+                    value={walkinHp}
+                    onChange={(e) => setWalkinHp(e.target.value)}
+                  />
+                  <span style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 2, display: "block" }}>
+                    Dihubungi saat nomor ini keluar sebagai pemenang undian.
+                  </span>
+                </div>
+              </div>
+
+              {/* Baris Nomor Struk Kasir & Keterangan */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--navy-900)", display: "block", marginBottom: 6 }}>
+                    Nomor Struk POS / Struk Belanja
+                  </label>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="Contoh: POS-2610-8910"
+                    value={walkinInvoice}
+                    onChange={(e) => setWalkinInvoice(e.target.value)}
+                  />
+                  <span style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 2, display: "block" }}>
+                    Nomor struk kasir yang distaples di sobekan fisik.
+                  </span>
+                </div>
+
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--navy-900)", display: "block", marginBottom: 6 }}>
+                    Catatan Tambahan (Opsional)
+                  </label>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="Catatan belanja / serah terima..."
+                    value={walkinKeterangan}
+                    onChange={(e) => setWalkinKeterangan(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              {/* PEMILIHAN NOMOR KUPON FISIK */}
+              <div style={{ borderTop: "1px solid var(--border)", paddingTop: 16, marginBottom: 20 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                  <label style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", color: "var(--navy-900)" }}>
+                    Nomor Seri Kupon Fisik yang Diberikan <span style={{ color: "var(--rose-600)" }}>*</span>
+                  </label>
+                  <div style={{ display: "flex", gap: 12 }}>
+                    <label style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                      <input
+                        type="radio"
+                        name="walkinMode"
+                        checked={walkinMode === "range"}
+                        onChange={() => setWalkinMode("range")}
+                      />
+                      <span>Rentang Nomor (Start - End)</span>
+                    </label>
+                    <label style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                      <input
+                        type="radio"
+                        name="walkinMode"
+                        checked={walkinMode === "custom"}
+                        onChange={() => setWalkinMode("custom")}
+                      />
+                      <span>Nomor Eceran (Custom)</span>
+                    </label>
+                  </div>
+                </div>
+
+                {walkinMode === "range" ? (
+                  <div style={{ background: "var(--slate-50)", padding: 14, borderRadius: 8, border: "1px solid var(--border)" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 8 }}>
+                      <div>
+                        <label style={{ fontSize: 11, fontWeight: 700, color: "var(--navy-900)", display: "block", marginBottom: 4 }}>
+                          Nomor Awal (1 - 2500)
+                        </label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={2500}
+                          className="input"
+                          placeholder="Misal: 151"
+                          value={walkinStart}
+                          onChange={(e) => {
+                            const val = e.target.value ? parseInt(e.target.value, 10) : "";
+                            setWalkinStart(val);
+                            if (val !== "" && (walkinEnd === "" || Number(walkinEnd) < Number(val))) {
+                              setWalkinEnd(val);
+                            }
+                          }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 11, fontWeight: 700, color: "var(--navy-900)", display: "block", marginBottom: 4 }}>
+                          Nomor Akhir (1 - 2500)
+                        </label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={2500}
+                          className="input"
+                          placeholder="Sama dengan awal jika hanya 1 kupon"
+                          value={walkinEnd}
+                          onChange={(e) => setWalkinEnd(e.target.value ? parseInt(e.target.value, 10) : "")}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Preview nomor kupon */}
+                    {walkinStart !== "" && Number(walkinStart) > 0 && (
+                      <div style={{ fontSize: 12, color: "var(--navy-800)", background: "#fff", padding: "8px 12px", borderRadius: 6, border: "1px solid var(--slate-200)", marginTop: 8 }}>
+                        Preview Kupon:{" "}
+                        <strong style={{ fontFamily: "monospace", color: "var(--gold-800)" }}>
+                          ORT-KUP{walkinPeriode.slice(2, 4)}{walkinPeriode.slice(5, 7)}-{String(walkinStart).padStart(4, "0")}
+                        </strong>
+                        {walkinEnd !== "" && Number(walkinEnd) > Number(walkinStart) && (
+                          <>
+                            {" "}s.d.{" "}
+                            <strong style={{ fontFamily: "monospace", color: "var(--gold-800)" }}>
+                              ORT-KUP{walkinPeriode.slice(2, 4)}{walkinPeriode.slice(5, 7)}-{String(walkinEnd).padStart(4, "0")}
+                            </strong>
+                            <span style={{ marginLeft: 8, background: "#E0F2FE", color: "#0369A1", padding: "2px 6px", borderRadius: 4, fontWeight: 700, fontSize: 11 }}>
+                              {Number(walkinEnd) - Number(walkinStart) + 1} Lembar
+                            </span>
+                          </>
+                        )}
+                        {(walkinEnd === "" || Number(walkinEnd) === Number(walkinStart)) && (
+                          <span style={{ marginLeft: 8, background: "#E0F2FE", color: "#0369A1", padding: "2px 6px", borderRadius: 4, fontWeight: 700, fontSize: 11 }}>
+                            1 Lembar
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div style={{ background: "var(--slate-50)", padding: 14, borderRadius: 8, border: "1px solid var(--border)" }}>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: "var(--navy-900)", display: "block", marginBottom: 4 }}>
+                      Daftar Nomor Kupon (Pisahkan dengan spasi atau koma)
+                    </label>
+                    <input
+                      type="text"
+                      className="input"
+                      placeholder="Contoh: 15, 27, 88"
+                      value={walkinCustom}
+                      onChange={(e) => setWalkinCustom(e.target.value)}
+                    />
+                    <span style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 4, display: "block" }}>
+                      Ketik nomor urut kupon fisik yang tidak berurutan.
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* SUBMIT BUTTON */}
+              <button
+                type="submit"
+                disabled={walkinSubmitting || !walkinNama.trim() || !walkinPetugas.trim() || (walkinMode === "range" && !walkinStart)}
+                className="btn btn-gold"
+                style={{
+                  width: "100%",
+                  height: 46,
+                  fontSize: 14,
+                  fontWeight: 800,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 8,
+                }}
+              >
+                {walkinSubmitting ? (
+                  <>
+                    <div className="spinner" style={{ width: 16, height: 16 }} /> Menyimpan Data Kupon...
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 size={18} /> Simpan Data Sobekan Kupon (Enter)
+                  </>
+                )}
+              </button>
+            </form>
+          </div>
+
+          {/* RIGHT: SESSION FEED / RIWAYAT SOBEKAN SESI INI */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            {/* Summary Box */}
+            <div
+              className="card"
+              style={{
+                padding: 16,
+                background: "linear-gradient(135deg, #0F172A, #1E293B)",
+                color: "#fff",
+                borderRadius: 10,
+              }}
+            >
+              <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: ".05em", color: "#94A3B8", fontWeight: 700 }}>
+                SOP Pengelolaan Sobekan Kasir
+              </div>
+              <div style={{ fontSize: 14, fontWeight: 800, marginTop: 4, color: "#F8FAFC" }}>
+                1. Input Data ➔ 2. Cap Stempel ➔ 3. Masuk Kotak
+              </div>
+              <p style={{ fontSize: 11, color: "#CBD5E1", margin: "8px 0 0", lineHeight: 1.5 }}>
+                Setelah nomor kupon berhasil tersimpan di sistem, beri stempel/tanda pada sobekan fisik lalu masukkan ke <strong>Kotak Undian Toko</strong>. Semua kupon di dalam kotak dijamin sah terverifikasi.
+              </p>
+            </div>
+
+            {/* Session Items Feed */}
+            <div className="card" style={{ padding: 18 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, borderBottom: "1px solid var(--border)", paddingBottom: 8 }}>
+                <div style={{ fontSize: 12, fontWeight: 800, color: "var(--navy-950)", textTransform: "uppercase" }}>
+                  Sobekan Terinput Sesi Ini ({walkinSessionFeed.length})
+                </div>
+                {walkinSessionFeed.length > 0 && (
+                  <span style={{ fontSize: 11, background: "var(--emerald-100)", color: "var(--emerald-800)", padding: "2px 8px", borderRadius: 12, fontWeight: 700 }}>
+                    {walkinSessionFeed.reduce((acc, curr) => acc + curr.totalKupon, 0)} Kupon Masuk
+                  </span>
+                )}
+              </div>
+
+              {walkinSessionFeed.length === 0 ? (
+                <div style={{ textAlign: "center", padding: "30px 10px", color: "var(--text-muted)" }}>
+                  <Layers size={32} style={{ margin: "0 auto 8px", opacity: 0.35 }} />
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>Belum ada sobekan yang diinput pada sesi ini</div>
+                  <p style={{ fontSize: 11, margin: "4px 0 0" }}>
+                    Ambil tumpukan sobekan fisik kasir, lalu ketik Nama dan Nomor kupon di formulir sebelah kiri.
+                  </p>
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10, maxHeight: 480, overflowY: "auto" }}>
+                  {walkinSessionFeed.map((item) => (
+                    <div
+                      key={item.id}
+                      style={{
+                        background: "var(--slate-50)",
+                        border: "1px solid var(--border)",
+                        borderRadius: 8,
+                        padding: "10px 12px",
+                        position: "relative",
+                      }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
+                        <div style={{ fontWeight: 800, fontSize: 13, color: "var(--navy-950)" }}>
+                          {item.nama}
+                        </div>
+                        <span style={{ fontSize: 10, color: "var(--text-muted)", fontFamily: "monospace" }}>
+                          {item.timestamp}
+                        </span>
+                      </div>
+
+                      <div style={{ fontSize: 11, fontFamily: "monospace", color: "var(--gold-800)", fontWeight: 700, marginBottom: 4 }}>
+                        {item.nomorAwal} {item.nomorAwal !== item.nomorAkhir ? `s.d. ${item.nomorAkhir}` : ""}{" "}
+                        <span style={{ fontSize: 10, background: "#E0F2FE", color: "#0369A1", padding: "1px 5px", borderRadius: 4, fontWeight: 800 }}>
+                          {item.totalKupon} lbr
+                        </span>
+                      </div>
+
+                      <div style={{ fontSize: 10, color: "var(--slate-600)", display: "flex", gap: 12 }}>
+                        <span>Struk: <strong>{item.invoice}</strong></span>
+                        <span>WA: <strong>{item.hp}</strong></span>
+                        <span>Kasir: <strong>{item.petugas}</strong></span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================
+          TAB 3: CEK PEMENANG UNDIAN (DOORPRIZE FINDER)
           ======================================================== */}
       {activeTab === "lookup" && (
         <div style={{ maxWidth: 760, margin: "0 auto" }}>
@@ -1430,9 +1996,16 @@ function CouponsContent() {
                           Kupon Gugur / Diskualifikasi
                         </span>
                       ) : (
-                        <span className="badge badge-aktif" style={{ fontSize: 10, textTransform: "uppercase", marginBottom: 4 }}>
-                          Kupon Sah Terverifikasi
-                        </span>
+                        <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4 }}>
+                          <span className="badge badge-aktif" style={{ fontSize: 10, textTransform: "uppercase" }}>
+                            Kupon Sah Terverifikasi
+                          </span>
+                          {lookupResult.coupon.tipe_penerima === "walk_in" && (
+                            <span style={{ fontSize: 10, background: "#E0F2FE", color: "#0369A1", padding: "2px 8px", borderRadius: 4, fontWeight: 800 }}>
+                              CASH WALK-IN (NON-MEMBER)
+                            </span>
+                          )}
+                        </div>
                       )}
                       <div style={{ fontSize: 24, fontWeight: 900, fontFamily: "monospace", color: lookupResult.coupon.status === "void" ? "#DC2626" : "var(--navy-950)", letterSpacing: ".02em" }}>
                         {lookupResult.coupon.nomor_kupon}
@@ -1474,17 +2047,22 @@ function CouponsContent() {
 
                   {/* Winner Detail Grid */}
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
-                    {/* Member Box */}
+                    {/* Member / Walk-In Box */}
                     <div style={{ background: "var(--slate-50)", padding: 14, borderRadius: 8, border: "1px solid var(--border)" }}>
                       <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: "var(--text-muted)" }}>
-                        Identitas Pemenang
+                        {lookupResult.coupon.tipe_penerima === "walk_in" ? "Identitas Pembeli Cash (Walk-In)" : "Identitas Pemenang Member"}
                       </div>
                       <div style={{ fontSize: 16, fontWeight: 800, color: "var(--navy-950)", margin: "4px 0" }}>
-                        {lookupResult.coupon.member.nama_pemilik}
+                        {lookupResult.coupon.nama_walk_in || lookupResult.coupon.member.nama_pemilik}
                       </div>
                       <div style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "monospace", marginBottom: 6 }}>
-                        ID: {lookupResult.coupon.member.id}
+                        {lookupResult.coupon.tipe_penerima === "walk_in" ? "Status: Non-Member (Belanja Tunai di Kasir)" : `ID Member: ${lookupResult.coupon.member.id}`}
                       </div>
+                      {lookupResult.coupon.no_invoice && (
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "var(--blue-800)", marginBottom: 4 }}>
+                          No. Struk POS: {lookupResult.coupon.no_invoice}
+                        </div>
+                      )}
                       <div style={{ fontSize: 12, color: "var(--slate-700)" }}>
                         {[lookupResult.coupon.member.alamat, lookupResult.coupon.member.kota].filter((v) => v && v !== "—").join(", ")}
                       </div>
@@ -1584,12 +2162,12 @@ function CouponsContent() {
       )}
 
       {/* ========================================================
-          TAB 3: RIWAYAT & REKAPITULASI
+          TAB 4: RIWAYAT & REKAPITULASI
           ======================================================== */}
       {activeTab === "history" && (
         <div>
           {/* Summary Stat Cards */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 20 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 14, marginBottom: 20 }}>
             <div className="card" style={{ padding: "14px 18px" }}>
               <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--text-muted)" }}>
                 Total Kupon Aktif
@@ -1601,10 +2179,10 @@ function CouponsContent() {
 
             <div className="card" style={{ padding: "14px 18px" }}>
               <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--text-muted)" }}>
-                Total Kupon Dibatalkan (Void)
+                Kupon Cash Walk-In
               </div>
-              <div style={{ fontSize: 22, fontWeight: 900, color: "var(--rose-700)", marginTop: 2 }}>
-                {historyStats.total_void.toLocaleString("id-ID")}
+              <div style={{ fontSize: 22, fontWeight: 900, color: "#0284C7", marginTop: 2 }}>
+                {(historyStats.total_walkin || 0).toLocaleString("id-ID")}
               </div>
             </div>
 
@@ -1614,6 +2192,15 @@ function CouponsContent() {
               </div>
               <div style={{ fontSize: 22, fontWeight: 900, color: "var(--gold-600)", marginTop: 2 }}>
                 {historyStats.total_member.toLocaleString("id-ID")}
+              </div>
+            </div>
+
+            <div className="card" style={{ padding: "14px 18px" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: "var(--text-muted)" }}>
+                Total Kupon Batal (Void)
+              </div>
+              <div style={{ fontSize: 22, fontWeight: 900, color: "var(--rose-700)", marginTop: 2 }}>
+                {historyStats.total_void.toLocaleString("id-ID")}
               </div>
             </div>
 
@@ -1639,13 +2226,13 @@ function CouponsContent() {
               flexWrap: "wrap",
             }}
           >
-            <div style={{ position: "relative", flex: "1 1 260px" }}>
+            <div style={{ position: "relative", flex: "1 1 240px" }}>
               <Search size={14} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-muted)" }} />
               <input
                 type="text"
                 className="input"
                 style={{ paddingLeft: 32, fontSize: 12, height: 36 }}
-                placeholder="Cari nomor kupon, member, no WA..."
+                placeholder="Cari kupon, nama pembeli, no HP, struk..."
                 value={historySearch}
                 onChange={(e) => {
                   setHistorySearch(e.target.value);
@@ -1653,6 +2240,20 @@ function CouponsContent() {
                 }}
               />
             </div>
+
+            <select
+              className="select"
+              style={{ fontSize: 12, height: 36 }}
+              value={historyTipe}
+              onChange={(e) => {
+                setHistoryTipe(e.target.value);
+                setPage(1);
+              }}
+            >
+              <option value="all">Semua Tipe (Member &amp; Walk-In)</option>
+              <option value="member">Hanya Member</option>
+              <option value="walk_in">Hanya Cash Walk-In</option>
+            </select>
 
             <select
               className="select"
@@ -1699,7 +2300,7 @@ function CouponsContent() {
                   <th style={{ width: 170 }}>Nomor Kupon</th>
                   <th>Member / Pemilik</th>
                   <th>Outlet Asal</th>
-                  <th>No. WhatsApp</th>
+                  <th>No. WhatsApp/HP</th>
                   <th>Tanggal Serah</th>
                   <th>Petugas</th>
                   <th style={{ textAlign: "center" }}>Status</th>
@@ -1730,15 +2331,37 @@ function CouponsContent() {
                         {c.nomor_kupon}
                       </td>
                       <td>
-                        <div style={{ fontWeight: 700, color: "var(--navy-950)" }}>{c.nama_pemilik}</div>
-                        <div style={{ fontSize: 10, fontFamily: "monospace", color: "var(--text-muted)" }}>{c.identity_id}</div>
+                        {c.tipe_penerima === "walk_in" ? (
+                          <div>
+                            <div style={{ fontWeight: 800, color: "var(--navy-950)" }}>
+                              {c.nama_walk_in || "Cash Walk-In"}
+                            </div>
+                            <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 2 }}>
+                              <span style={{ fontSize: 9, background: "#E0F2FE", color: "#0369A1", padding: "1px 5px", borderRadius: 4, fontWeight: 800 }}>
+                                CASH WALK-IN
+                              </span>
+                              {c.no_invoice && (
+                                <span style={{ fontSize: 10, color: "var(--text-muted)" }}>
+                                  Struk: {c.no_invoice}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ) : (
+                          <div>
+                            <div style={{ fontWeight: 700, color: "var(--navy-950)" }}>{c.nama_pemilik}</div>
+                            <div style={{ fontSize: 10, fontFamily: "monospace", color: "var(--text-muted)" }}>{c.identity_id}</div>
+                          </div>
+                        )}
                       </td>
                       <td>
-                        <div style={{ fontWeight: 600 }}>{c.nama_outlet}</div>
-                        <span className="badge badge-draft" style={{ fontSize: 9, textTransform: "uppercase" }}>{c.outlet_tipe}</span>
+                        <div style={{ fontWeight: 600 }}>{c.tipe_penerima === "walk_in" ? "Kasir Retail Non-Member" : c.nama_outlet}</div>
+                        <span className="badge badge-draft" style={{ fontSize: 9, textTransform: "uppercase" }}>
+                          {c.tipe_penerima === "walk_in" ? "RETAIL" : c.outlet_tipe}
+                        </span>
                       </td>
                       <td style={{ fontFamily: "monospace" }}>
-                        {c.kupon_whatsapp || c.member_whatsapp || "—"}
+                        {c.tipe_penerima === "walk_in" ? (c.no_hp_walk_in || c.kupon_whatsapp || "—") : (c.kupon_whatsapp || c.member_whatsapp || "—")}
                       </td>
                       <td>{c.tanggal_serah}</td>
                       <td>{c.petugas}</td>

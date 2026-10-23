@@ -18,7 +18,7 @@ Dokumen ini memuat rangkuman menyeluruh mengenai seluruh pekerjaan pengembangan,
 ## 🚀 2. DAFTAR FITUR UTAMA YANG TELAH SELESAI DIBANGUN
 
 ### A. Manajemen Master Data & Identitas Terpadu (One Identity)
-- **Oriental One Identity (`identities`)**: Menyatukan multi-outlet milik satu pelanggan ke dalam satu identitas terpadu (format: `102-YYMMDD-XX`).
+- **Oriental One Identity (`identities`)**: Menyatukan multi-outlet milik satu pelanggan ke dalam satu identitas terpadu (format: `102-YYMMDD-NN`).
 - **Outlet Mapping & Aliasing**: Setiap outlet diklasifikasikan ke dalam tipe bisnis tertentu (`retail`, `grosir`, `ukm`) dengan rate konversi poin masing-masing.
 - **Pembersihan Data (Cleansing)**: Fitur deteksi outlet tanpa relasi (*unmapped outlets*) dan penggabungan profil pelanggan (*Merge Customer*).
 
@@ -29,7 +29,7 @@ Dokumen ini memuat rangkuman menyeluruh mengenai seluruh pekerjaan pengembangan,
 ### C. Engine Kalkulasi Poin & Kupon Otomatis (`src/lib/calc.ts`)
 - **Perhitungan Poin Sesuai Kategori**:
   - **Retail**: 1 Poin per kelipatan Rp 100.000.
-  - **Grosir**: 1 Poin per kelipatan Rp 250.000.
+  - **Grosir**: 1 Poin per kelipatan Rp 200.000.
   - **UKM Kuliner**: 1 Poin per kelipatan Rp 50.000.
 - **Perhitungan Kupon Undian**: 1 Lembar Kupon per kelipatan Rp 150.000 belanja di seluruh tipe outlet.
 - **Kalkulasi Pembulatan ke Bawah (`Math.floor`)**: Transaksi tidak digabung antar-faktur untuk mencegah manipulasi pecahan.
@@ -50,9 +50,20 @@ Dokumen ini memuat rangkuman menyeluruh mengenai seluruh pekerjaan pengembangan,
 - **Lookup & Pelacakan Doorprize**:
   - Fasilitas pencarian instan pemilik kupon berdasarkan nomor seri utuh (`ORT-KUP2609-0001`), prefix pendek (`2609-0001`), maupun nomor urut angka (`1`).
   - Menampilkan nama pemenang, kontak WhatsApp, toko/outlet asal, tanggal serah terima, dan nama kasir petugas yang menyerahkan.
+  - Mendukung verifikasi kupon member maupun kupon walk-in lengkap dengan nomor struk POS.
 
-### E. Modul Sanksi Pelanggaran & Devaluasi Akun (`/penalties`)
+- **Penanganan Kupon Cash Walk-In (Non-Member / Sobekan Kasir)**:
+  - Mengakomodasi pelanggan tunai/walk-in yang berbelanja $\ge$ Rp 150.000 dan berhak kupon undian namun tidak ingin mendaftar sebagai member formal.
+  - **Alur Kerja SOP Lapangan**:
+    1. *Saat Transaksi Kasir*: Kasir menyobek kupon fisik. Lembar utama diserahkan ke pembeli, sedangkan sobekan toko di-keep kasir dan ditulis Nama + No. HP pembeli serta dilampirkan nomor struk belanja POS.
+    2. *Saat Santai / Closing*: Admin/Kasir membuka Tab **"Input Kupon Cash Walk-In"** di `/coupons` untuk *batch input* cepat dari tumpukan sobekan (Nama, No. HP, No. Struk POS, Rentang Nomor Kupon, Kasir).
+    3. *Masuk Kotak Undian*: Sobekan fisik yang sudah tersimpan di CRM distempel *"OK / SUDAH INPUT"* lalu dimasukkan ke dalam **Kotak Undian Fisik Toko**.
+  - **Pencegahan Kontaminasi Statement**: Transaksi walk-in ditampung secara aman di bawah entitas sistem `999-CASH-WALKIN` dan secara otomatis diisolasi dari daftar antrean cetak E-Statement bulanan serta perhitungan poin loyalty member.
+  - **Audit & Export Excel**: Seluruh kupon walk-in tercatat di database dengan nomor struk POS dan dapat diekspor lengkap ke file Excel `.xlsx` dengan penanda status `CASH WALK-IN`.
+
+### E. Modul Sanksi Pelanggaran & Devaluasi Akun (Akses: Menu Pelanggan `/identities/[id]`)
 - **Penjatuhan Sanksi (Penalty Application)**:
+  - Diakses langsung melalui tombol modal **"Atur Sanksi / Penalti Member"** pada detail profil pelanggan, dengan backend API `/api/penalties`.
   - Jenis sanksi: *Sementara (Temporary)* atau *Permanen (Permanent)*.
   - Opsi reset saldo kupon dan pemotongan poin akumulasi.
   - Otorisasi ganda menggunakan **Password Owner/Management**.
@@ -65,12 +76,12 @@ Komponen cetak presisi pada [`StatementDocument.tsx`](file:///c:/01.%20Chandra/0
   - **Header Resmi & Periode**: Logo Oriental, judul dokumen resmi, identitas periode bulan berjalan (`SEPTEMBER 2026`), dan badge status (`FINAL / DRAFT`).
   - **Profil Pelanggan**: Nama pemilik, alamat outlet, kecamatan, kota, kode pos, provinsi, dan nomor Oriental One Identity (`102-YYMMDD-NN`).
   - **4 Kartu Ringkasan KPI**:
-    1. *Total Point Bulan Berjalan*: Poin belanja POS + reward poin waste UCO (jika ada).
-    2. *Total Point Yang Dimiliki*: Akumulasi poin aktif terverifikasi s.d. tanggal transaksi terakhir.
+    1. *Total Poin Bulan Berjalan*: Poin belanja POS + reward poin waste UCO (jika ada).
+    2. *Total Poin Yang Dimiliki*: Akumulasi poin aktif terverifikasi s.d. tanggal transaksi terakhir.
     3. *Total Kupon Bulan Berjalan*: Lembar kupon yang berhak diperoleh bulan ini.
     4. *Total Kupon Yang Dimiliki*: Akumulasi lembar kupon yang dimiliki s.d. tanggal transaksi terakhir.
   - **Banner Peringatan Khusus**: Muncul secara otomatis jika akun terkena evaluasi khusus/devaluasi sanksi (`STATUS : SUSPEND/DEVALUASI AKUN`).
-  - **Tabel Rekapan Bulanan**: Rincian per-outlet (ID Outlet, Nama Outlet, Total Transaksi, Point, Kupon).
+  - **Tabel Rekapan Bulanan**: Rincian per-outlet (ID Outlet, Nama Outlet, Total Transaksi, Poin, Kupon).
   - **Dua Kartu Sorotan Manfaat Finansial**:
     1. *Nilai Penghematan Belanja*: Estimasi penghematan biaya parkir dan subsidi ongkir kurir berdasar jumlah nota transaksi.
     2. *Pendapatan Limbah (UCO)*: Total Kg minyak jelantah, nilai tunai yang diterima, serta bonus poin Oriental.
@@ -133,6 +144,7 @@ Komponen cetak presisi pada [`StatementDocument.tsx`](file:///c:/01.%20Chandra/0
   - **Halaman 1 (Customer Facing)**: Menampilkan 2 kartu sorotan manfaat finansial berdampingan:
     1. *Nilai Penghematan Belanja Bulan Ini*: Total transaksi nota, rincian hemat parkir, rincian subsidi kurir, dan total rupiah yang dihemat.
     2. *Pendapatan Tambahan Waste (UCO)*: Total Kg minyak jelantah disetor, dana tunai yang diterima, serta bonus poin Oriental.
+
 ### K. Modul Antrean Approval & Pemetaan Entitas (`/approvals`)
 - **Tujuan**: Menyediakan pusat kendali bagi Owner/Manajemen untuk meninjau data yang memerlukan otorisasi, penanganan anomali, atau pemetaan manual sebelum masuk ke pembukuan resmi CRM.
 - **Kategori Antrean**:
@@ -140,6 +152,9 @@ Komponen cetak presisi pada [`StatementDocument.tsx`](file:///c:/01.%20Chandra/0
   - `kode_tabrakan`: Satu nomor kode 102 yang terdeteksi dipakai oleh lebih dari satu nama berbeda pada file master Excel.
   - `outlet_tanpa_induk`: Outlet yang nomor induk Akun Utamanya belum terdaftar di CRM.
   - `kode_lama_131`: Pelanggan dengan kode POS lama yang dapat ditautkan ke profil unit usaha CRM.
+  - `transaksi_outlet_nonaktif`: Faktur belanja baru yang terdeteksi untuk outlet yang telah ditutup secara manual oleh Owner (memerlukan tinjauan persetujuan).
+  - `invoice_berubah`: Nomor invoice lama yang muncul kembali dengan nilai atau tanggal transaksi yang telah dimodifikasi.
+  - `nama_mirip`: Nama pelanggan pada faktur yang memiliki kemiripan bunyi/ketik dengan outlet yang sudah ada.
   - `anomali_master`: Baris master dengan format kode tidak valid, nama kosong, atau kode tidak lazim.
 - **Fitur Pencarian Cerdas & Paginasi**:
   - Bilah pencarian real-time untuk mencari berdasarkan ID approval, kode 102/131, nama customer/POS, nama file Excel asal, atau alasan anomali.
@@ -245,7 +260,7 @@ Komponen cetak presisi pada [`StatementDocument.tsx`](file:///c:/01.%20Chandra/0
 | Akun | Username | Password Default | Hak Akses |
 |---|---|---|---|
 | **Owner / Manajemen** | `admin` | `oriental2026` | Akses Penuh (Otorisasi Sanksi, Config, Cleansing) |
-| **Kasir / Petugas CRM** | `kasir` | `kasir123` | Akses Operasional (Input, Cetak, Serah Terima) |
+| **Kasir / Petugas CRM** | `kasir` | `kasir2026` | Akses Operasional (Input, Cetak, Serah Terima) |
 
 ---
 

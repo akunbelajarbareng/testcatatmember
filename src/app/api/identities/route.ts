@@ -27,6 +27,9 @@ export async function GET(request: NextRequest) {
     conditions.push(`i.status != 'merged'`);
   }
 
+  // Kecualikan akun sistem Walk-In non-member dari master member CRM
+  conditions.push(`i.id NOT LIKE '999-%'`);
+
   if (q) {
     conditions.push(`(i.nama_pemilik LIKE ? OR i.id LIKE ?)`);
     params.push(`%${q}%`, `%${q}%`);

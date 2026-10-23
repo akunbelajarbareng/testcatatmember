@@ -191,8 +191,8 @@ export async function GET(request: NextRequest) {
     }));
 
     // 7. Global System Stats
-    const totalIdentities = (db.prepare(`SELECT COUNT(*) as c FROM identities WHERE status = 'aktif'`).get() as { c: number }).c;
-    const totalOutlets    = (db.prepare(`SELECT COUNT(*) as c FROM outlets WHERE aktif = 1`).get() as { c: number }).c;
+    const totalIdentities = (db.prepare(`SELECT COUNT(*) as c FROM identities WHERE status = 'aktif' AND id NOT LIKE '999-%'`).get() as { c: number }).c;
+    const totalOutlets    = (db.prepare(`SELECT COUNT(*) as c FROM outlets WHERE aktif = 1 AND identity_id NOT LIKE '999-%'`).get() as { c: number }).c;
     const totalAliases    = (db.prepare(`SELECT COUNT(*) as c FROM pos_aliases`).get() as { c: number }).c;
     const totalRawInvoices = (db.prepare(`SELECT COUNT(*) as c FROM invoices`).get() as { c: number }).c;
     const pendingApprovals = (db.prepare(`SELECT COUNT(*) as c FROM approvals WHERE status = 'menunggu'`).get() as { c: number }).c;

@@ -46,6 +46,10 @@ export async function GET(req: NextRequest) {
         c.status,
         c.tanggal_serah,
         c.petugas,
+        c.tipe_penerima,
+        c.nama_walk_in,
+        c.no_hp_walk_in,
+        c.no_invoice,
         COALESCE(c.whatsapp, i.whatsapp, '-') AS whatsapp,
         c.created_at AS waktu_input,
         c.batch_id,
@@ -66,27 +70,31 @@ export async function GET(req: NextRequest) {
       ORDER BY c.periode_kupon DESC, c.nomor_urut ASC
     `).all(...params) as any[];
 
-    const excelRows = rows.map((r, idx) => ({
-      'No': idx + 1,
-      'Nomor Kupon': r.nomor_kupon,
-      'Periode': r.periode_kupon,
-      'Nomor Urut': r.nomor_urut,
-      'Status': r.status === 'aktif' ? 'AKTIF' : 'VOID (BATAL)',
-      'ID Member': r.identity_id,
-      'Nama Member': r.nama_pemilik,
-      'No. WhatsApp': r.whatsapp,
-      'Outlet Asal': r.nama_outlet,
-      'ID Outlet': r.outlet_id,
-      'Lini Bisnis': r.outlet_tipe,
-      'Tanggal Serah': r.tanggal_serah,
-      'Petugas': r.petugas,
-      'Waktu Input': r.waktu_input,
-      'ID Batch': r.batch_id || '-',
-      'Alamat': r.alamat,
-      'Kecamatan': r.kecamatan,
-      'Kota': r.kota,
-      'Keterangan': r.keterangan_batch,
-    }));
+    const excelRows = rows.map((r, idx) => {
+      const isWalkIn = r.tipe_penerima === 'walk_in';
+      return {
+        'No': idx + 1,
+        'Nomor Kupon': r.nomor_kupon,
+        'Periode': r.periode_kupon,
+        'Nomor Urut': r.nomor_urut,
+        'Status': r.status === 'aktif' ? 'AKTIF' : 'VOID (BATAL)',
+        'Tipe Penerima': isWalkIn ? 'CASH WALK-IN' : 'MEMBER',
+        'ID Member': isWalkIn ? 'NON-MEMBER' : r.identity_id,
+        'Nama Pelanggan': isWalkIn ? (r.nama_walk_in || 'Walk-In') : r.nama_pemilik,
+        'No. WhatsApp/HP': isWalkIn ? (r.no_hp_walk_in || r.whatsapp) : r.whatsapp,
+        'No. Struk POS': r.no_invoice || '-',
+        'Outlet Asal': isWalkIn ? 'Kasir Retail Non-Member' : r.nama_outlet,
+        'ID Outlet': isWalkIn ? '-' : r.outlet_id,
+        'Lini Bisnis': isWalkIn ? 'RETAIL' : r.outlet_tipe,
+        'Tanggal Serah': r.tanggal_serah,
+        'Petugas': r.petugas,
+        'Waktu Input': r.waktu_input,
+        'ID Batch': r.batch_id || '-',
+        'Alamat': isWalkIn ? 'Transaksi Kasir Langsung' : r.alamat,
+        'Kota': isWalkIn ? (r.no_invoice ? `Struk: ${r.no_invoice}` : '-') : r.kota,
+        'Keterangan': r.keterangan_batch,
+      };
+    });
 
     const worksheet = XLSX.utils.json_to_sheet(excelRows);
 
@@ -94,22 +102,23 @@ export async function GET(req: NextRequest) {
       { wch: 6 },  // No
       { wch: 22 }, // Nomor Kupon
       { wch: 12 }, // Periode
-      { wch: 12 }, // Nomor Urut
+      { wch: 10 }, // Nomor Urut
       { wch: 14 }, // Status
-      { wch: 18 }, // ID Member
-      { wch: 28 }, // Nama Member
-      { wch: 18 }, // No WhatsApp
-      { wch: 28 }, // Outlet Asal
-      { wch: 24 }, // ID Outlet
+      { wch: 16 }, // Tipe Penerima
+      { wch: 16 }, // ID Member
+      { wch: 28 }, // Nama Pelanggan
+      { wch: 18 }, // No WhatsApp/HP
+      { wch: 18 }, // No. Struk POS
+      { wch: 24 }, // Outlet Asal
+      { wch: 18 }, // ID Outlet
       { wch: 14 }, // Lini Bisnis
       { wch: 14 }, // Tanggal Serah
-      { wch: 18 }, // Petugas
-      { wch: 22 }, // Waktu Input
+      { wch: 16 }, // Petugas
+      { wch: 20 }, // Waktu Input
       { wch: 10 }, // ID Batch
       { wch: 30 }, // Alamat
-      { wch: 18 }, // Kecamatan
       { wch: 16 }, // Kota
-      { wch: 24 }, // Keterangan
+      { wch: 25 }, // Keterangan
     ];
 
     const workbook = XLSX.utils.book_new();

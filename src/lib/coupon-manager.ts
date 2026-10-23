@@ -323,28 +323,48 @@ export function resolveRequestedCoupons(
   };
 }
 
+export interface WalkInHandoverParams {
+  periode_kupon: string; // YYYY-MM (e.g. 2026-10)
+  nama_walk_in: string; // Nama pembeli di sobekan kupon
+  no_hp_walk_in?: string; // No WhatsApp / HP pembeli
+  no_invoice?: string; // Nomor struk POS
+  petugas: string; // Kasir / admin yang input
+  keterangan?: string;
+  mode: 'range' | 'custom';
+  range?: { start: number; end: number };
+  custom_numbers?: number[];
+}
+
 /**
  * Validasi Anti-Duplikasi: Cek apakah ada nomor kupon yang sudah aktif digunakan
  */
 export function checkCouponConflicts(
   numbers: string[]
-): Array<{ nomor_kupon: string; identity_id: string; nama_pemilik: string; tanggal_serah: string }> {
+): Array<{ nomor_kupon: string; identity_id: string; nama_pemilik: string; tanggal_serah: string; tipe_penerima?: string }> {
   if (numbers.length === 0) return [];
 
   // Pecah query jika numbers banyak (SQLite max variable limitation)
   const chunkSize = 200;
-  const conflicts: Array<{ nomor_kupon: string; identity_id: string; nama_pemilik: string; tanggal_serah: string }> = [];
+  const conflicts: Array<{ nomor_kupon: string; identity_id: string; nama_pemilik: string; tanggal_serah: string; tipe_penerima?: string }> = [];
 
   for (let i = 0; i < numbers.length; i += chunkSize) {
     const chunk = numbers.slice(i, i + chunkSize);
     const placeholders = chunk.map(() => '?').join(',');
     const rows = db.prepare(`
-      SELECT c.nomor_kupon, c.identity_id, i.nama_pemilik, c.tanggal_serah
+      SELECT
+        c.nomor_kupon,
+        c.identity_id,
+        CASE
+          WHEN c.tipe_penerima = 'walk_in' THEN COALESCE(c.nama_walk_in, 'Cash Walk-In') || ' (Non-Member)'
+          ELSE i.nama_pemilik
+        END AS nama_pemilik,
+        c.tanggal_serah,
+        c.tipe_penerima
       FROM coupons c
       JOIN identities i ON c.identity_id = i.id
       WHERE c.nomor_kupon IN (${placeholders})
         AND c.status = 'aktif'
-    `).all(...chunk) as Array<{ nomor_kupon: string; identity_id: string; nama_pemilik: string; tanggal_serah: string }>;
+    `).all(...chunk) as Array<{ nomor_kupon: string; identity_id: string; nama_pemilik: string; tanggal_serah: string; tipe_penerima?: string }>;
 
     conflicts.push(...rows);
   }
@@ -513,6 +533,150 @@ export function executeCouponHandover(params: HandoverParams): {
 }
 
 /**
+ * Eksekusi Serah Terima Kupon Fisik untuk Pelanggan Cash Walk-In (Non-Member)
+ * Mendukung batch entry dari tumpukan sobekan fisik kasir
+ */
+export function executeWalkInCouponHandover(params: WalkInHandoverParams): {
+  success: boolean;
+  batch_id: number;
+  total_issued: number;
+  nomor_awal: string;
+  nomor_akhir: string;
+  coupons: string[];
+} {
+  const {
+    periode_kupon,
+    nama_walk_in,
+    no_hp_walk_in,
+    no_invoice,
+    petugas,
+    keterangan,
+    mode,
+    range,
+    custom_numbers,
+  } = params;
+
+  if (!nama_walk_in || nama_walk_in.trim() === '') {
+    throw new Error('Nama pelanggan pembeli (walk-in) wajib diisi');
+  }
+  if (!petugas || petugas.trim() === '') {
+    throw new Error('Nama kasir / petugas yang menyerahkan wajib diisi');
+  }
+  if (!periode_kupon || !/^\d{4}-\d{2}$/.test(periode_kupon)) {
+    throw new Error('Format periode kupon harus YYYY-MM (misal 2026-10)');
+  }
+
+  // 1. Resolve nomor kupon yang diminta
+  const resolved = resolveRequestedCoupons(periode_kupon, {
+    mode,
+    range,
+    custom_numbers,
+  });
+
+  if (resolved.count === 0) {
+    throw new Error('Tidak ada kupon yang dihasilkan dari pilihan Anda');
+  }
+
+  // 2. Validasi Anti-Duplikasi
+  const conflicts = checkCouponConflicts(resolved.numbers);
+  if (conflicts.length > 0) {
+    const contoh = conflicts
+      .slice(0, 3)
+      .map((c) => `${c.nomor_kupon} (milik: ${c.nama_pemilik})`)
+      .join(', ');
+    const sisa = conflicts.length > 3 ? ` dan ${conflicts.length - 3} kupon lainnya` : '';
+    throw new Error(`Ditemukan ${conflicts.length} kupon yang sudah pernah diserahkan: ${contoh}${sisa}`);
+  }
+
+  // 3. Eksekusi Transaction
+  let batchId = 0;
+  const nomorAwal = resolved.numbers[0];
+  const nomorAkhir = resolved.numbers[resolved.numbers.length - 1];
+  const cleanNama = nama_walk_in.trim();
+  const cleanHp = no_hp_walk_in?.trim() || null;
+  const cleanInvoice = no_invoice?.trim() || null;
+  const cleanPetugas = petugas.trim();
+  const batchNote = keterangan?.trim() || (cleanInvoice ? `Struk POS: ${cleanInvoice}` : 'Transaksi Tunai Walk-In');
+
+  db.transaction(() => {
+    // Insert batch serah terima
+    const batchResult = db.prepare(`
+      INSERT INTO coupon_batches (
+        identity_id, outlet_asal_id, periode_kupon, jumlah_kupon,
+        nomor_awal, nomor_akhir, keterangan, petugas, whatsapp, status,
+        tipe_penerima, nama_walk_in, no_hp_walk_in, no_invoice
+      ) VALUES (
+        '999-CASH-WALKIN', '999-CASH-WALKIN-01', ?, ?,
+        ?, ?, ?, ?, ?, 'aktif',
+        'walk_in', ?, ?, ?
+      )
+    `).run(
+      periode_kupon,
+      resolved.count,
+      nomorAwal,
+      nomorAkhir,
+      batchNote,
+      cleanPetugas,
+      cleanHp,
+      cleanNama,
+      cleanHp,
+      cleanInvoice
+    );
+
+    batchId = Number(batchResult.lastInsertRowid);
+
+    // Batch insert coupons
+    const insertCoupon = db.prepare(`
+      INSERT INTO coupons (
+        nomor_kupon, identity_id, outlet_asal_id, batch_id,
+        periode_kupon, nomor_urut, status, petugas, whatsapp, tanggal_serah,
+        tipe_penerima, nama_walk_in, no_hp_walk_in, no_invoice
+      ) VALUES (
+        ?, '999-CASH-WALKIN', '999-CASH-WALKIN-01', ?,
+        ?, ?, 'aktif', ?, ?, date('now','localtime'),
+        'walk_in', ?, ?, ?
+      )
+    `);
+
+    for (let i = 0; i < resolved.numbers.length; i++) {
+      const num = resolved.numbers[i];
+      const seq = resolved.seqs[i];
+      insertCoupon.run(
+        num,
+        batchId,
+        periode_kupon,
+        seq,
+        cleanPetugas,
+        cleanHp,
+        cleanNama,
+        cleanHp,
+        cleanInvoice
+      );
+    }
+
+    // Audit Log
+    db.prepare(`
+      INSERT INTO audit_log (aksi, tabel, record_id, keterangan)
+      VALUES (?, ?, ?, ?)
+    `).run(
+      'handover_walkin_coupon',
+      'coupon_batches',
+      String(batchId),
+      `Serah terima ${resolved.count} kupon (${nomorAwal} - ${nomorAkhir}) kepada Cash Walk-In ${cleanNama} (Struk: ${cleanInvoice || '-'}, WA: ${cleanHp || '-'}) oleh ${cleanPetugas}`
+    );
+  })();
+
+  return {
+    success: true,
+    batch_id: batchId,
+    total_issued: resolved.count,
+    nomor_awal: nomorAwal,
+    nomor_akhir: nomorAkhir,
+    coupons: resolved.numbers,
+  };
+}
+
+/**
  * Doorprize Lookup: Mencari pemilik kupon undian
  */
 export function lookupCouponWinner(query: string, defaultPeriode = '2026-09') {
@@ -530,6 +694,10 @@ export function lookupCouponWinner(query: string, defaultPeriode = '2026-09') {
       c.petugas,
       c.whatsapp AS kupon_whatsapp,
       c.created_at AS serah_created_at,
+      c.tipe_penerima,
+      c.nama_walk_in,
+      c.no_hp_walk_in,
+      c.no_invoice,
       i.id AS identity_id,
       i.nama_pemilik,
       i.alamat,
@@ -565,6 +733,10 @@ export function lookupCouponWinner(query: string, defaultPeriode = '2026-09') {
         c.petugas,
         c.whatsapp AS kupon_whatsapp,
         c.created_at AS serah_created_at,
+        c.tipe_penerima,
+        c.nama_walk_in,
+        c.no_hp_walk_in,
+        c.no_invoice,
         i.id AS identity_id,
         i.nama_pemilik,
         i.alamat,
@@ -594,6 +766,8 @@ export function lookupCouponWinner(query: string, defaultPeriode = '2026-09') {
     };
   }
 
+  const isWalkIn = row.tipe_penerima === 'walk_in';
+
   return {
     found: true,
     coupon: {
@@ -605,23 +779,40 @@ export function lookupCouponWinner(query: string, defaultPeriode = '2026-09') {
       void_reason: row.void_reason || null,
       tanggal_serah: row.tanggal_serah,
       petugas: row.petugas,
-      whatsapp: row.kupon_whatsapp || row.member_whatsapp || '—',
-      member: {
-        id: row.identity_id,
-        nama_pemilik: row.nama_pemilik,
-        alamat: row.alamat || '—',
-        kota: row.kota || '—',
-        kecamatan: row.kecamatan || '—',
-        provinsi: row.provinsi || '—',
-      },
+      whatsapp: isWalkIn
+        ? (row.no_hp_walk_in || row.kupon_whatsapp || '—')
+        : (row.kupon_whatsapp || row.member_whatsapp || '—'),
+      tipe_penerima: isWalkIn ? 'walk_in' : 'member',
+      nama_walk_in: row.nama_walk_in || null,
+      no_hp_walk_in: row.no_hp_walk_in || null,
+      no_invoice: row.no_invoice || null,
+      member: isWalkIn
+        ? {
+            id: 'NON-MEMBER',
+            nama_pemilik: row.nama_walk_in || 'Pelanggan Cash Walk-In',
+            alamat: 'Pelanggan Umum (Belanja Tunai di Kasir)',
+            kota: row.no_invoice ? `No. Struk: ${row.no_invoice}` : '—',
+            kecamatan: '—',
+            provinsi: '—',
+          }
+        : {
+            id: row.identity_id,
+            nama_pemilik: row.nama_pemilik,
+            alamat: row.alamat || '—',
+            kota: row.kota || '—',
+            kecamatan: row.kecamatan || '—',
+            provinsi: row.provinsi || '—',
+          },
       outlet_asal: {
         id: row.outlet_id,
-        nama_outlet: row.nama_outlet,
-        tipe: row.outlet_tipe,
+        nama_outlet: isWalkIn ? 'Kasir Retail Walk-In' : row.nama_outlet,
+        tipe: isWalkIn ? 'retail' : row.outlet_tipe,
       },
       batch: {
         id: row.batch_id,
-        keterangan: row.batch_keterangan || '—',
+        keterangan: isWalkIn
+          ? (row.no_invoice ? `No. Struk: ${row.no_invoice}` : (row.batch_keterangan || 'Serah Terima Walk-In'))
+          : (row.batch_keterangan || '—'),
       },
     },
   };

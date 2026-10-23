@@ -11,6 +11,7 @@ export async function GET(req: NextRequest) {
     const periode = url.searchParams.get('periode') || '';
     const outlet_id = url.searchParams.get('outlet_id') || '';
     const status = url.searchParams.get('status') || ''; // 'aktif' | 'void' | ''
+    const tipe = url.searchParams.get('tipe') || 'all'; // 'all' | 'member' | 'walk_in'
     const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10));
     const limit = Math.min(100, Math.max(10, parseInt(url.searchParams.get('limit') || '50', 10)));
     const offset = (page - 1) * limit;
@@ -19,9 +20,18 @@ export async function GET(req: NextRequest) {
     const params: (string | number)[] = [];
 
     if (q) {
-      whereSql += ` AND (c.nomor_kupon LIKE ? OR i.nama_pemilik LIKE ? OR c.identity_id LIKE ? OR c.whatsapp LIKE ? OR o.nama_outlet LIKE ?)`;
+      whereSql += ` AND (
+        c.nomor_kupon LIKE ? OR
+        i.nama_pemilik LIKE ? OR
+        c.identity_id LIKE ? OR
+        c.whatsapp LIKE ? OR
+        o.nama_outlet LIKE ? OR
+        c.nama_walk_in LIKE ? OR
+        c.no_hp_walk_in LIKE ? OR
+        c.no_invoice LIKE ?
+      )`;
       const queryPattern = `%${q}%`;
-      params.push(queryPattern, queryPattern, queryPattern, queryPattern, queryPattern);
+      params.push(queryPattern, queryPattern, queryPattern, queryPattern, queryPattern, queryPattern, queryPattern, queryPattern);
     }
 
     if (periode) {
@@ -37,6 +47,12 @@ export async function GET(req: NextRequest) {
     if (status && status !== 'all') {
       whereSql += ` AND c.status = ?`;
       params.push(status);
+    }
+
+    if (tipe === 'walk_in') {
+      whereSql += ` AND c.tipe_penerima = 'walk_in'`;
+    } else if (tipe === 'member') {
+      whereSql += ` AND (c.tipe_penerima IS NULL OR c.tipe_penerima != 'walk_in')`;
     }
 
     // Count total rows
@@ -64,6 +80,10 @@ export async function GET(req: NextRequest) {
         c.whatsapp AS kupon_whatsapp,
         c.created_at,
         c.batch_id,
+        c.tipe_penerima,
+        c.nama_walk_in,
+        c.no_hp_walk_in,
+        c.no_invoice,
         i.id AS identity_id,
         i.nama_pemilik,
         i.kota,
@@ -86,12 +106,14 @@ export async function GET(req: NextRequest) {
       SELECT
         COUNT(CASE WHEN status = 'aktif' THEN 1 END) AS total_aktif,
         COUNT(CASE WHEN status = 'void' THEN 1 END) AS total_void,
-        COUNT(DISTINCT identity_id) AS total_member,
+        COUNT(CASE WHEN tipe_penerima = 'walk_in' AND status = 'aktif' THEN 1 END) AS total_walkin,
+        COUNT(DISTINCT CASE WHEN tipe_penerima != 'walk_in' AND identity_id NOT LIKE '999-%' THEN identity_id END) AS total_member,
         (SELECT COUNT(*) FROM coupon_batches WHERE status = 'aktif') AS total_batches
       FROM coupons
     `).get() as {
       total_aktif: number;
       total_void: number;
+      total_walkin: number;
       total_member: number;
       total_batches: number;
     };

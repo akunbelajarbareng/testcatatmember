@@ -248,6 +248,10 @@ export function bulanLabel(yyyyMM: string): string {
 }
 
 export function buildStatementData(identityId: string, bulan: string): StatementData {
+  if (identityId.startsWith('999-')) {
+    throw new Error(`Akun ${identityId} (Cash Walk-In) dikecualikan dari buku Statement bulanan.`);
+  }
+
   // Identity info
   const identity = db
     .prepare(`

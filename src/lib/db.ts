@@ -386,6 +386,52 @@ function initSchema(db: Database.Database) {
   } catch {
     // Kolom sudah ada
   }
+
+  // Migrasi kolom Walk-In / Non-Member pada coupons dan coupon_batches jika belum ada
+  const walkInCols = [
+    'tipe_penerima TEXT NOT NULL DEFAULT \'member\'',
+    'nama_walk_in TEXT',
+    'no_hp_walk_in TEXT',
+    'no_invoice TEXT',
+  ];
+
+  for (const col of walkInCols) {
+    try {
+      db.exec(`ALTER TABLE coupons ADD COLUMN ${col};`);
+    } catch {
+      // Kolom sudah ada
+    }
+    try {
+      db.exec(`ALTER TABLE coupon_batches ADD COLUMN ${col};`);
+    } catch {
+      // Kolom sudah ada
+    }
+  }
+
+  // Indeks Walk-In & Invoice
+  try {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_coupons_tipe ON coupons(tipe_penerima);
+      CREATE INDEX IF NOT EXISTS idx_coupons_invoice ON coupons(no_invoice);
+      CREATE INDEX IF NOT EXISTS idx_coupon_batches_tipe ON coupon_batches(tipe_penerima);
+    `);
+  } catch {
+    // Indeks sudah ada
+  }
+
+  // Pastikan Master Identitas & Outlet khusus Walk-In (Non-Member) tersedia
+  try {
+    db.exec(`
+      INSERT OR IGNORE INTO identities (id, nama_pemilik, alamat, status)
+      VALUES ('999-CASH-WALKIN', 'Pelanggan Walk-In (Non-Member)', 'Transaksi Kasir Non-Member', 'aktif');
+
+      INSERT OR IGNORE INTO outlets (id, identity_id, tipe, nama_outlet, aktif)
+      VALUES ('999-CASH-WALKIN-01', '999-CASH-WALKIN', 'retail', 'Kasir Retail Non-Member', 1);
+    `);
+  } catch {
+    // Sudah ada
+  }
 }
 
 export default db;
+

@@ -24,11 +24,11 @@ export async function GET(req: NextRequest) {
     const bulanStart = `${bulan}-01`;
     const bulanEnd = `${bulan}-${String(lastDay).padStart(2, '0')}`;
 
-    // Cari identities yang memiliki outlet aktif
+    // Cari identities yang memiliki outlet aktif (kecualikan akun khusus walk-in non-member)
     const identities = db.prepare(`
       SELECT DISTINCT i.id, i.nama_pemilik, i.kota
       FROM identities i
-      WHERE EXISTS (
+      WHERE i.id NOT LIKE '999-%' AND EXISTS (
         SELECT 1 FROM outlets o WHERE o.identity_id = i.id AND o.aktif = 1
       )
       ORDER BY i.nama_pemilik ASC
