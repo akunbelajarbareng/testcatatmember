@@ -17,7 +17,7 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ identityId: string; bulan: string }> }
 ) {
-  const auth = requireAuth(_req);
+  const auth = await requireAuth(_req);
   if ('errorResponse' in auth) return auth.errorResponse;
 
   const { identityId, bulan } = await params;

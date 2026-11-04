@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint"
   },
@@ -14,6 +14,7 @@
     "@radix-ui/react-tooltip": "^1.2.16",
     "@types/better-sqlite3": "^9.6.0",
     "better-sqlite3": "^13.0.3",
+    "firebase-admin": "^14.5.0",
     "lucide-react": "^1.50.0",
     "next": "16.3.8",
     "react": "19.2.8",

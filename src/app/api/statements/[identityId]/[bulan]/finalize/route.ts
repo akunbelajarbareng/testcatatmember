@@ -14,7 +14,7 @@ export async function POST(
   _req: NextRequest,
   { params }: { params: Promise<{ identityId: string; bulan: string }> }
 ) {
-  const auth = requireAuth(_req, { role: 'admin' });
+  const auth = await requireAuth(_req, { role: 'admin' });
   if ('errorResponse' in auth) return auth.errorResponse;
 
   const { identityId, bulan } = await params;

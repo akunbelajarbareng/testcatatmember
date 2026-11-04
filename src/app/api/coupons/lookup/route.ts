@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { lookupCouponWinner } from '@/lib/coupon-manager';
+import { lookupCouponWinnerFirestore } from '@/lib/firestore-service';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -14,7 +14,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Nomor kupon yang dicari wajib diisi' }, { status: 400 });
     }
 
-    const result = lookupCouponWinner(q, periode);
+    const result = await lookupCouponWinnerFirestore(q, periode);
     return NextResponse.json(result);
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Internal error';
@@ -32,7 +32,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Nomor kupon yang dicari wajib diisi' }, { status: 400 });
     }
 
-    const result = lookupCouponWinner(query, periode);
+    const result = await lookupCouponWinnerFirestore(query, periode);
     return NextResponse.json(result);
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Internal error';

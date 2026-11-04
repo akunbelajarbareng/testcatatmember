@@ -80,6 +80,9 @@ interface MergePreview {
     nama_pemilik: string;
     outletsCount: number;
     invoicesCount: number;
+    couponsCount?: number;
+    batchesCount?: number;
+    penaltiesCount?: number;
     months: string[];
   };
   target: {
@@ -87,6 +90,9 @@ interface MergePreview {
     nama_pemilik: string;
     outletsCount: number;
     invoicesCount: number;
+    couponsCount?: number;
+    batchesCount?: number;
+    penaltiesCount?: number;
     months: string[];
   };
   collisions: string[];
@@ -1909,6 +1915,15 @@ export default function IdentityDetailPage({ params }: { params: Promise<{ id: s
                       </span>
                       <span>
                         <strong>Syarat 3:</strong> Akun sumber ({identity.id}) otomatis disembunyikan permanen dari daftar member
+                      </span>
+                    </div>
+
+                    <div style={{ marginTop: 6, paddingTop: 8, borderTop: "1px dashed #A7F3D0", display: "flex", alignItems: "center", gap: 8, color: "#065F46", fontSize: 11 }}>
+                      <span style={{ width: 16, height: 16, borderRadius: "50%", background: "#059669", color: "white", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 10, flexShrink: 0 }}>
+                        ★
+                      </span>
+                      <span>
+                        <strong>Aset &amp; Relasi Dialihkan:</strong> {mergePreview.source.outletsCount} outlet, {mergePreview.source.invoicesCount} invoice POS, <strong>{mergePreview.source.couponsCount ?? 0} kupon fisik</strong> ({mergePreview.source.batchesCount ?? 0} batch), {mergePreview.source.penaltiesCount ?? 0} catatan sanksi.
                       </span>
                     </div>
                   </div>

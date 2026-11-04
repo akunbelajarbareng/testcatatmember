@@ -17,9 +17,9 @@ import {
 } from "lucide-react";
 
 function LoginForm() {
-  const router = useRouter();
   const searchParams = useSearchParams();
-  const nextUrl = searchParams.get("next") || "/";
+  const rawNext = searchParams.get("next") || "/";
+  const nextUrl = (!rawNext || rawNext === "/login" || rawNext.startsWith("/login?")) ? "/" : rawNext;
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");

@@ -10,7 +10,7 @@ export const runtime = 'nodejs';
 export async function POST(request: NextRequest) {
   try {
     const { password } = await request.json();
-    const valid = verifyOwnerPassword(password);
+    const valid = await verifyOwnerPassword(password);
     return NextResponse.json({ valid });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Internal error';

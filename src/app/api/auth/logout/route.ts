@@ -11,7 +11,7 @@ export async function POST(request: NextRequest) {
   try {
     const token = request.cookies.get('crm_session')?.value;
     if (token) {
-      logoutUser(token);
+      await logoutUser(token);
     }
 
     const isHttps =

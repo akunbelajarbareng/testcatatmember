@@ -9,7 +9,7 @@ export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const auth = requireAuth(request, { role: 'admin' });
+  const auth = await requireAuth(request, { role: 'admin' });
   if ('errorResponse' in auth) return auth.errorResponse;
 
   const { id } = await params;

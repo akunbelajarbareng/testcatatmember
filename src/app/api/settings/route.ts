@@ -1,30 +1,39 @@
 /**
- * GET /api/settings - Ambil rules_config dan status sistem (Admin Only)
- * POST /api/settings - Update nilai konversi rate poin / kupon (Admin Only)
+ * GET /api/settings - Ambil rules_config dan status sistem dari Firestore (Admin Only)
+ * POST /api/settings - Update nilai konversi rate poin / kupon ke Firestore (Admin Only)
  */
 import { NextRequest, NextResponse } from 'next/server';
-import db from '@/lib/db';
 import { requireAuth } from '@/lib/auth';
+import {
+  getAllRulesRowsFirestore,
+  updateRuleConfigFirestore,
+  getSystemStatsFirestore,
+} from '@/lib/firestore-service';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 export async function GET(req: NextRequest) {
-  const auth = requireAuth(req, { role: 'admin' });
+  const auth = await requireAuth(req, { role: 'admin' });
   if ('errorResponse' in auth) return auth.errorResponse;
 
   try {
-    const rules = db.prepare(`SELECT * FROM rules_config ORDER BY kunci`).all();
-    const auditCount = (db.prepare(`SELECT COUNT(*) as c FROM audit_log`).get() as { c: number }).c;
-    const batchCount = (db.prepare(`SELECT COUNT(*) as c FROM import_batches`).get() as { c: number }).c;
+    const rules = await getAllRulesRowsFirestore();
+    const stats = await getSystemStatsFirestore();
 
     return NextResponse.json({
       rules,
       stats: {
-        auditCount,
-        batchCount,
-        dbPath: 'data/oriental_crm.db',
+        auditCount: stats.auditCount,
+        batchCount: stats.batchCount,
+        identitiesCount: stats.identitiesCount,
+        outletsCount: stats.outletsCount,
+        couponsCount: stats.couponsCount,
+        invoicesCount: stats.invoicesCount,
+        dbEngine: 'Firebase Firestore (Cloud)',
+        dbProject: process.env.FIREBASE_PROJECT_ID || 'oriental-crm-221e3',
       },
+      backups: [],
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Internal error';
@@ -33,7 +42,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const auth = requireAuth(req, { role: 'admin' });
+  const auth = await requireAuth(req, { role: 'admin' });
   if ('errorResponse' in auth) return auth.errorResponse;
 
   try {
@@ -49,18 +58,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Nilai harus angka positif' }, { status: 400 });
     }
 
-    db.prepare(`
-      UPDATE rules_config
-      SET nilai = ?, keterangan = COALESCE(?, keterangan), updated_at = datetime('now','localtime')
-      WHERE kunci = ?
-    `).run(num, keterangan || null, key);
-
-    db.prepare(`INSERT INTO audit_log(aksi, tabel, record_id, keterangan) VALUES (?, ?, ?, ?)`).run(
-      'update_rule',
-      'rules_config',
-      key,
-      `Ubah nilai ${key} menjadi ${num} (oleh ${auth.user.username})`
-    );
+    await updateRuleConfigFirestore(key, num, keterangan);
 
     return NextResponse.json({ success: true, key, nilai: num });
   } catch (err) {
@@ -68,4 +66,3 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
-

@@ -12,7 +12,7 @@ export const runtime = 'nodejs';
 
 export async function GET(request: NextRequest) {
   // Wajib role Admin
-  const auth = requireAuth(request, { role: 'admin' });
+  const auth = await requireAuth(request, { role: 'admin' });
   if ('errorResponse' in auth) return auth.errorResponse;
 
   try {
@@ -46,7 +46,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   // 1. Wajib role Admin
-  const auth = requireAuth(request, { role: 'admin' });
+  const auth = await requireAuth(request, { role: 'admin' });
   if ('errorResponse' in auth) return auth.errorResponse;
 
   try {

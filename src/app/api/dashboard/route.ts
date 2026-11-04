@@ -25,7 +25,7 @@ function formatBulanLabel(yyyyMM: string): string {
 }
 
 export async function GET(request: NextRequest) {
-  const auth = requireAuth(request);
+  const auth = await requireAuth(request);
   if ('errorResponse' in auth) return auth.errorResponse;
 
   try {

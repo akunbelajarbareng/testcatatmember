@@ -11,7 +11,7 @@ export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 export async function GET(request: NextRequest) {
-  const auth = requireAuth(request, { role: 'admin' });
+  const auth = await requireAuth(request, { role: 'admin' });
   if ('errorResponse' in auth) return auth.errorResponse;
 
   try {
@@ -32,7 +32,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const auth = requireAuth(request, { role: 'admin' });
+  const auth = await requireAuth(request, { role: 'admin' });
   if ('errorResponse' in auth) return auth.errorResponse;
 
   try {
@@ -51,7 +51,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      message: `Akun ${source_id} berhasil dilebur ke dalam ${target_id}.`,
+      message: `Akun ${source_id} berhasil dilebur ke dalam ${target_id}. Berhasil mengalihkan ${result.transferredInvoices} invoice, ${result.transferredCoupons} kupon fisik (${result.transferredBatches} batch), ${result.transferredOutlets} unit usaha, dan ${result.transferredAliases} alias kasir.`,
       result,
     });
   } catch (err) {

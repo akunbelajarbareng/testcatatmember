@@ -8,12 +8,12 @@ export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 export async function POST(request: NextRequest) {
-  const auth = requireAuth(request, { role: 'admin' });
+  const auth = await requireAuth(request, { role: 'admin' });
   if ('errorResponse' in auth) return auth.errorResponse;
 
   try {
     const { current_password, new_password } = await request.json();
-    setOwnerPassword(current_password, new_password);
+    await setOwnerPassword(current_password, new_password);
     return NextResponse.json({ success: true, message: 'Password Owner berhasil diperbarui' });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Internal error';

@@ -417,6 +417,9 @@ export interface MergePreviewResult {
     nama_pemilik: string;
     outletsCount: number;
     invoicesCount: number;
+    couponsCount: number;
+    batchesCount: number;
+    penaltiesCount: number;
     months: string[];
   };
   target: {
@@ -424,6 +427,9 @@ export interface MergePreviewResult {
     nama_pemilik: string;
     outletsCount: number;
     invoicesCount: number;
+    couponsCount: number;
+    batchesCount: number;
+    penaltiesCount: number;
     months: string[];
   };
   collisions: string[];
@@ -462,6 +468,15 @@ export function previewMergeIdentities(sourceId: string, targetId: string): Merg
     targetInvoicesCount = (db.prepare(`SELECT count(*) as c FROM invoices WHERE outlet_id IN (${tPlaceholders})`).get(...targetOutletIds) as { c: number }).c;
     targetMonths = (db.prepare(`SELECT DISTINCT substr(tanggal, 1, 7) as bulan FROM invoices WHERE outlet_id IN (${tPlaceholders}) ORDER BY bulan`).all(...targetOutletIds) as { bulan: string }[]).map((r) => r.bulan);
   }
+
+  // Kupon & Batch & Penalti counts
+  const sourceCouponsCount = (db.prepare(`SELECT count(*) as c FROM coupons WHERE identity_id = ?`).get(sourceId) as { c: number })?.c || 0;
+  const sourceBatchesCount = (db.prepare(`SELECT count(*) as c FROM coupon_batches WHERE identity_id = ?`).get(sourceId) as { c: number })?.c || 0;
+  const sourcePenaltiesCount = (db.prepare(`SELECT count(*) as c FROM member_penalties WHERE identity_id = ?`).get(sourceId) as { c: number })?.c || 0;
+
+  const targetCouponsCount = (db.prepare(`SELECT count(*) as c FROM coupons WHERE identity_id = ?`).get(targetId) as { c: number })?.c || 0;
+  const targetBatchesCount = (db.prepare(`SELECT count(*) as c FROM coupon_batches WHERE identity_id = ?`).get(targetId) as { c: number })?.c || 0;
+  const targetPenaltiesCount = (db.prepare(`SELECT count(*) as c FROM member_penalties WHERE identity_id = ?`).get(targetId) as { c: number })?.c || 0;
 
   // 1. Syarat 1: Nomor invoice wajib beda (tidak ada duplikasi)
   let collisions: string[] = [];
@@ -504,6 +519,9 @@ export function previewMergeIdentities(sourceId: string, targetId: string): Merg
       nama_pemilik: String(source.nama_pemilik),
       outletsCount: sourceOutlets.length,
       invoicesCount: sourceInvoicesCount,
+      couponsCount: sourceCouponsCount,
+      batchesCount: sourceBatchesCount,
+      penaltiesCount: sourcePenaltiesCount,
       months: sourceMonths,
     },
     target: {
@@ -511,6 +529,9 @@ export function previewMergeIdentities(sourceId: string, targetId: string): Merg
       nama_pemilik: String(target.nama_pemilik),
       outletsCount: targetOutlets.length,
       invoicesCount: targetInvoicesCount,
+      couponsCount: targetCouponsCount,
+      batchesCount: targetBatchesCount,
+      penaltiesCount: targetPenaltiesCount,
       months: targetMonths,
     },
     collisions,
@@ -526,6 +547,10 @@ export function mergeIdentities(
   transferredOutlets: number;
   transferredAliases: number;
   transferredInvoices: number;
+  transferredCoupons: number;
+  transferredBatches: number;
+  transferredPenalties: number;
+  transferredWastePurchases: number;
   targetId: string;
 } {
   // Syarat 4: Password Owner Universal
@@ -542,6 +567,10 @@ export function mergeIdentities(
   let transferredOutlets = 0;
   let transferredAliases = 0;
   let transferredInvoices = 0;
+  let transferredCoupons = 0;
+  let transferredBatches = 0;
+  let transferredPenalties = 0;
+  let transferredWastePurchases = 0;
 
   const doMerge = db.transaction(() => {
     const sourceOutlets = db.prepare(`SELECT * FROM outlets WHERE identity_id = ?`).all(sourceId) as {
@@ -569,6 +598,18 @@ export function mergeIdentities(
         const invUpdate = db.prepare(`UPDATE invoices SET outlet_id = ? WHERE outlet_id = ?`).run(matchedTargetOutlet.id, sOut.id);
         transferredInvoices += invUpdate.changes;
 
+        // Pindahkan pembelian bahan baku (waste_purchases)
+        const wasteUpdate = db.prepare(`UPDATE waste_purchases SET outlet_id = ?, identity_id = ? WHERE outlet_id = ?`).run(matchedTargetOutlet.id, targetId, sOut.id);
+        transferredWastePurchases += wasteUpdate.changes;
+
+        // Pindahkan kupon fisik terhubung ke outlet ini
+        const couponOutUpdate = db.prepare(`UPDATE coupons SET outlet_asal_id = ?, identity_id = ? WHERE outlet_asal_id = ?`).run(matchedTargetOutlet.id, targetId, sOut.id);
+        transferredCoupons += couponOutUpdate.changes;
+
+        // Pindahkan batch kupon terhubung ke outlet ini
+        const batchOutUpdate = db.prepare(`UPDATE coupon_batches SET outlet_asal_id = ?, identity_id = ? WHERE outlet_asal_id = ?`).run(matchedTargetOutlet.id, targetId, sOut.id);
+        transferredBatches += batchOutUpdate.changes;
+
         // Recalculate outlet target
         recalcOutlet(matchedTargetOutlet.id);
 
@@ -577,10 +618,39 @@ export function mergeIdentities(
       } else {
         // Pindahkan outlet ke target
         db.prepare(`UPDATE outlets SET identity_id = ?, updated_at = datetime('now','localtime') WHERE id = ?`).run(targetId, sOut.id);
+
+        // Pindahkan kupon dan batch yang terhubung ke outlet ini ke target identity
+        const cUpdate = db.prepare(`UPDATE coupons SET identity_id = ? WHERE outlet_asal_id = ?`).run(targetId, sOut.id);
+        transferredCoupons += cUpdate.changes;
+
+        const bUpdate = db.prepare(`UPDATE coupon_batches SET identity_id = ? WHERE outlet_asal_id = ?`).run(targetId, sOut.id);
+        transferredBatches += bUpdate.changes;
+
+        const wUpdate = db.prepare(`UPDATE waste_purchases SET identity_id = ? WHERE outlet_id = ?`).run(targetId, sOut.id);
+        transferredWastePurchases += wUpdate.changes;
+
         recalcOutlet(sOut.id);
         transferredOutlets++;
       }
     }
+
+    // Pindahkan sisa kupon dan batch source yang mungkin belum berelasi outlet_asal_id
+    const extraCoupons = db.prepare(`UPDATE coupons SET identity_id = ? WHERE identity_id = ?`).run(targetId, sourceId);
+    transferredCoupons += extraCoupons.changes;
+
+    const extraBatches = db.prepare(`UPDATE coupon_batches SET identity_id = ? WHERE identity_id = ?`).run(targetId, sourceId);
+    transferredBatches += extraBatches.changes;
+
+    // Pindahkan sanksi member (member_penalties)
+    const penUpdate = db.prepare(`UPDATE member_penalties SET identity_id = ? WHERE identity_id = ?`).run(targetId, sourceId);
+    transferredPenalties += penUpdate.changes;
+
+    // Pindahkan waste_purchases jika ada yang langsung mengacu ke identity_id
+    const extraWaste = db.prepare(`UPDATE waste_purchases SET identity_id = ? WHERE identity_id = ?`).run(targetId, sourceId);
+    transferredWastePurchases += extraWaste.changes;
+
+    // Pindahkan exclusions jika ada
+    db.prepare(`UPDATE exclusions SET identity_id = ? WHERE identity_id = ?`).run(targetId, sourceId);
 
     // Tandai statement target perlu revisi
     db.prepare(`UPDATE statements SET status = 'perlu_revisi', updated_at = datetime('now','localtime') WHERE identity_id = ?`).run(targetId);
@@ -603,7 +673,7 @@ export function mergeIdentities(
       'merge_identity',
       'identities',
       sourceId,
-      `Merge akun ${sourceId} (${preview.source.nama_pemilik}) ke ${targetId} (${preview.target.nama_pemilik}). Dipindahkan: ${transferredInvoices} invoice, ${transferredAliases} alias, ${transferredOutlets} outlet. Disetujui Owner.`
+      `Merge akun ${sourceId} (${preview.source.nama_pemilik}) ke ${targetId} (${preview.target.nama_pemilik}). Dipindahkan: ${transferredInvoices} invoice, ${transferredAliases} alias, ${transferredOutlets} outlet, ${transferredCoupons} kupon, ${transferredBatches} batch kupon, ${transferredPenalties} sanksi penalti. Disetujui Owner.`
     );
   });
 
@@ -613,6 +683,10 @@ export function mergeIdentities(
     transferredOutlets,
     transferredAliases,
     transferredInvoices,
+    transferredCoupons,
+    transferredBatches,
+    transferredPenalties,
+    transferredWastePurchases,
     targetId,
   };
 }

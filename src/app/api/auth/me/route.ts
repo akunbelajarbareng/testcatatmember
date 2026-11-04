@@ -10,7 +10,7 @@ export const runtime = 'nodejs';
 export async function GET(request: NextRequest) {
   try {
     const token = request.cookies.get('crm_session')?.value;
-    const user = validateSession(token);
+    const user = await validateSession(token);
 
     if (!user) {
       return NextResponse.json({ authenticated: false, user: null }, { status: 401 });

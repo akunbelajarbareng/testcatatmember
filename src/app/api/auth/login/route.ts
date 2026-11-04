@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
 
     // 2. Coba Autentikasi
     try {
-      const { user, token } = authenticateUser(username, password);
+      const { user, token } = await authenticateUser(username, password);
 
       // Login sukses: reset penghitung kegagalan
       resetLoginRateLimit(rateLimitKey);

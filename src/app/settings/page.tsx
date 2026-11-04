@@ -1,6 +1,6 @@
 "use client";
 import React, { useEffect, useState } from "react";
-import { Settings, Save, CheckCircle, AlertTriangle, Database, Shield, RefreshCw, Download, Clock } from "lucide-react";
+import { Settings, Save, CheckCircle, AlertTriangle, Database, Shield, RefreshCw, Download, Clock, HardDrive, FolderCheck, ArrowDownToLine } from "lucide-react";
 
 interface Rule {
   id: number;
@@ -10,9 +10,28 @@ interface Rule {
   updated_at: string;
 }
 
+interface BackupItem {
+  filename: string;
+  sizeBytes: number;
+  sizeFormatted: string;
+  createdAt: string;
+  location: 'project' | 'system';
+  path: string;
+}
+
 export default function SettingsPage() {
   const [rules, setRules] = useState<Rule[]>([]);
-  const [stats, setStats] = useState<{ auditCount: number; batchCount: number; dbPath: string } | null>(null);
+  const [stats, setStats] = useState<{
+    auditCount: number;
+    batchCount: number;
+    dbPath: string;
+    latestBackup?: BackupItem | null;
+    totalBackups?: number;
+  } | null>(null);
+  const [backups, setBackups] = useState<BackupItem[]>([]);
+  const [backupLoading, setBackupLoading] = useState(false);
+  const [backupMsg, setBackupMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
   const [loading, setLoading] = useState(true);
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [values, setValues] = useState<Record<string, number>>({});
@@ -31,6 +50,7 @@ export default function SettingsPage() {
       if (res.ok) {
         setRules(json.rules || []);
         setStats(json.stats || null);
+        setBackups(json.backups || []);
         const map: Record<string, number> = {};
         (json.rules || []).forEach((r: Rule) => {
           map[r.kunci] = r.nilai;
@@ -41,6 +61,28 @@ export default function SettingsPage() {
       setMsg({ type: "error", text: "Gagal memuat konfigurasi" });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleManualLocalBackup = async () => {
+    setBackupLoading(true);
+    setBackupMsg(null);
+    try {
+      const res = await fetch("/api/maintenance/backup", { method: "POST" });
+      const json = await res.json();
+      if (res.ok) {
+        setBackupMsg({
+          type: "success",
+          text: `Berhasil mencadangkan ke folder lokal! File: ${json.result?.filename} (${json.result?.savedLocations?.length || 2} direktori tersimpan).`,
+        });
+        await loadSettings();
+      } else {
+        setBackupMsg({ type: "error", text: json.error || "Gagal mencadangkan database." });
+      }
+    } catch {
+      setBackupMsg({ type: "error", text: "Terjadi kesalahan jaringan saat mencadangkan database." });
+    } finally {
+      setBackupLoading(false);
     }
   };
 
@@ -354,49 +396,167 @@ export default function SettingsPage() {
         )}
       </div>
 
-      {/* System & Database Info */}
+      {/* System & Database Info & Auto-Backup */}
       <div className="card p-6 mb-6">
-        <h2 className="text-base font-bold text-slate-900 mb-2 flex items-center gap-2">
-          <Database size={18} className="text-blue-600" /> Database &amp; Audit Status
-        </h2>
-        <p className="text-xs text-slate-500 mb-4">
-          Status penyimpanan data lokal SQLite dan riwayat audit operasional.
-        </p>
-
-        <div className="grid grid-cols-3 gap-4 text-xs">
-          <div className="p-3 bg-slate-50 rounded border border-slate-200">
-            <span className="text-slate-500 block">Lokasi File Database:</span>
-            <span className="font-mono font-bold text-slate-800 break-all">{stats?.dbPath || "data/oriental_crm.db"}</span>
-          </div>
-          <div className="p-3 bg-slate-50 rounded border border-slate-200">
-            <span className="text-slate-500 block">Total Import Batch:</span>
-            <span className="text-base font-bold text-slate-900">{stats?.batchCount || 0} Kali Import</span>
-          </div>
-          <div className="p-3 bg-slate-50 rounded border border-slate-200">
-            <span className="text-slate-500 block">Total Catatan Audit Log:</span>
-            <span className="text-base font-bold text-slate-900">{stats?.auditCount || 0} Catatan</span>
-          </div>
-        </div>
-
-        {/* One-Click Backup Download */}
-        <div className="mt-5 pt-4 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
           <div>
-            <div className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-              <span>Pencadangan Data Seketika (One-Click Backup)</span>
-              <span className="badge badge-success text-[10px] py-0 px-1.5">Aman &amp; Konsisten</span>
-            </div>
-            <p className="text-[11px] text-slate-500 mt-0.5">
-              Unduh salinan snapshot utuh database SQLite (.db) berisi seluruh akun One Identity, kupon, dan transaksi.
+            <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+              <Database size={18} className="text-blue-600" /> Database &amp; Auto-Backup Lokal
+            </h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Status penyimpanan SQLite, penjadwalan pencadangan otomatis harian, dan riwayat arsip lokal.
             </p>
           </div>
-          <a
-            href="/api/maintenance/backup"
-            download
-            className="btn btn-outline btn-sm flex items-center justify-center gap-1.5 text-blue-700 border-blue-300 hover:bg-blue-50 shrink-0 font-medium"
-          >
-            <Download size={14} /> Unduh Database (.db)
-          </a>
+          <span className="badge badge-success text-xs py-1 px-2.5 flex items-center gap-1.5 shrink-0 self-start sm:self-auto">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+            Auto-Backup Aktif (23:00 WIB)
+          </span>
         </div>
+
+        {/* Status Metrics */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs mb-4">
+          <div className="p-3 bg-slate-50 rounded border border-slate-200">
+            <span className="text-slate-500 block text-[11px]">Database Aktif:</span>
+            <span className="font-mono font-bold text-slate-800 text-xs break-all">{stats?.dbPath || "data/oriental_crm.db"}</span>
+          </div>
+          <div className="p-3 bg-slate-50 rounded border border-slate-200">
+            <span className="text-slate-500 block text-[11px]">Pencadangan Terakhir:</span>
+            <span className="font-medium text-slate-900 text-xs block">
+              {stats?.latestBackup?.createdAt
+                ? new Date(stats.latestBackup.createdAt).toLocaleString("id-ID", {
+                    day: "2-digit",
+                    month: "short",
+                    year: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })
+                : "Belum ada"}
+            </span>
+            {stats?.latestBackup?.sizeFormatted && (
+              <span className="text-[10px] text-slate-500">Ukuran: {stats.latestBackup.sizeFormatted}</span>
+            )}
+          </div>
+          <div className="p-3 bg-slate-50 rounded border border-slate-200">
+            <span className="text-slate-500 block text-[11px]">Total Arsip Cadangan:</span>
+            <span className="text-base font-bold text-slate-900">{stats?.totalBackups ?? backups.length} File</span>
+            <span className="text-[10px] text-slate-500 block">Retensi otomatis 30 hari</span>
+          </div>
+          <div className="p-3 bg-slate-50 rounded border border-slate-200">
+            <span className="text-slate-500 block text-[11px]">Total Audit Log:</span>
+            <span className="text-base font-bold text-slate-900">{stats?.auditCount || 0} Catatan</span>
+            <span className="text-[10px] text-slate-500 block">{stats?.batchCount || 0} kali import POS</span>
+          </div>
+        </div>
+
+        {/* Folder Lokasi Auto-Backup */}
+        <div className="p-3.5 bg-blue-50/70 rounded-lg border border-blue-200/80 mb-4 text-xs">
+          <div className="font-semibold text-blue-950 flex items-center gap-1.5 mb-1.5">
+            <FolderCheck size={15} className="text-blue-600" />
+            <span>Direktori Penyimpanan Otomatis (Multi-Lokasi Lokal):</span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
+            <div className="bg-white p-2.5 rounded border border-blue-200">
+              <span className="font-bold text-slate-700 block">1. Folder Sistem Windows (Anti-Terhapus):</span>
+              <code className="text-blue-700 font-mono break-all">C:\Oriental_CRM_Backups\</code>
+              <p className="text-[10px] text-slate-500 mt-1">Disinkronkan dengan Windows Task Scheduler setiap malam.</p>
+            </div>
+            <div className="bg-white p-2.5 rounded border border-blue-200">
+              <span className="font-bold text-slate-700 block">2. Folder Proyek Internal:</span>
+              <code className="text-blue-700 font-mono break-all">&lt;proyek&gt;\data\backups\</code>
+              <p className="text-[10px] text-slate-500 mt-1">Arsip lokal yang mudah diakses langsung dari folder aplikasi.</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Feedback Pesan Backup */}
+        {backupMsg && (
+          <div className={`alert alert-${backupMsg.type} mb-4 text-xs py-2.5`}>
+            {backupMsg.type === "success" ? <CheckCircle size={15} /> : <AlertTriangle size={15} />}
+            <span>{backupMsg.text}</span>
+          </div>
+        )}
+
+        {/* Action Buttons */}
+        <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-slate-200">
+          <div>
+            <div className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+              <span>Operasi Cadangan Manual &amp; Unduh</span>
+              <span className="badge badge-neutral text-[10px] py-0 px-1.5">Non-Blocking WAL</span>
+            </div>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              Cadangkan seketika ke kedua folder lokal atau unduh file snapshot utuh ke komputer.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={handleManualLocalBackup}
+              disabled={backupLoading}
+              className="btn btn-primary btn-sm flex items-center justify-center gap-1.5 font-medium disabled:opacity-60"
+            >
+              <RefreshCw size={13} className={backupLoading ? "animate-spin" : ""} />
+              {backupLoading ? "Mencadangkan..." : "Cadangkan ke Folder Lokal Sekarang"}
+            </button>
+            <a
+              href="/api/maintenance/backup"
+              download
+              className="btn btn-outline btn-sm flex items-center justify-center gap-1.5 text-blue-700 border-blue-300 hover:bg-blue-50 font-medium"
+            >
+              <Download size={13} /> Unduh (.db)
+            </a>
+          </div>
+        </div>
+
+        {/* Riwayat 5 Cadangan Lokal Terakhir */}
+        {backups.length > 0 && (
+          <div className="mt-4 pt-3 border-t border-slate-100">
+            <span className="text-[11px] font-bold text-slate-700 block mb-2">
+              Daftar 5 Arsip Cadangan Lokal Terbaru:
+            </span>
+            <div className="overflow-x-auto border border-slate-200 rounded">
+              <table className="w-full text-left text-[11px] divide-y divide-slate-200">
+                <thead className="bg-slate-50 text-slate-600 font-semibold">
+                  <tr>
+                    <th className="py-2 px-3">Nama File Cadangan</th>
+                    <th className="py-2 px-3">Waktu Dibuat</th>
+                    <th className="py-2 px-3">Ukuran</th>
+                    <th className="py-2 px-3 text-right">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {backups.slice(0, 5).map((b, idx) => (
+                    <tr key={idx} className="hover:bg-slate-50">
+                      <td className="py-2 px-3 font-mono font-medium text-slate-800">
+                        {b.filename}
+                      </td>
+                      <td className="py-2 px-3 text-slate-600">
+                        {new Date(b.createdAt).toLocaleString("id-ID", {
+                          day: "2-digit",
+                          month: "short",
+                          year: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </td>
+                      <td className="py-2 px-3 text-slate-600">
+                        <span className="badge badge-neutral text-[10px]">{b.sizeFormatted}</span>
+                      </td>
+                      <td className="py-2 px-3 text-right">
+                        <a
+                          href={`/api/maintenance/backup?filename=${encodeURIComponent(b.filename)}`}
+                          download={b.filename}
+                          className="text-blue-600 hover:text-blue-800 font-medium inline-flex items-center gap-1 text-[11px]"
+                        >
+                          <ArrowDownToLine size={12} /> Unduh
+                        </a>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Keamanan & Password Approval Owner Universal */}

@@ -59,5 +59,9 @@ cloudflared.exe
 # scratch & temporary scripts
 scratch/
 
+# firebase credentials
+serviceAccountKey.json
+*serviceAccountKey*.json
+
 
 
