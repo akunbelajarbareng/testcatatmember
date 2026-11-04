@@ -55,3 +55,4 @@ Sebelum menekan tombol *Deploy*, buka menu accordion **"Environment Variables"**
 3. Masuk ke menu **Pengaturan**:
    - Pastikan status koneksi database terhubung ke Firebase Firestore `oriental-crm-221e3`.
 4. Coba lakukan pencarian kupon di menu **Lookup Kupon** (contoh: `ORT-KUP2610-0001`). Data akan langsung ditarik dari Firebase Cloud!
+

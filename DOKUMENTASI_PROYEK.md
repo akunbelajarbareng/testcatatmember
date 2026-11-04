@@ -264,3 +264,4 @@ pm2 restart oriental-crm
 * **Pemilik Proyek**: PT Oriental Retail / Grosir
 * **Status Build**: Production Ready (Next.js 16 + Firebase Firestore)
 * **Lisensi**: Hak Cipta Dilindungi Undang-Undang.
+
