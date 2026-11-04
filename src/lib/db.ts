@@ -6,12 +6,17 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 
-const DB_DIR = path.join(process.cwd(), 'data');
+const isVercel = !!process.env.VERCEL;
+const DB_DIR = isVercel ? '/tmp' : path.join(process.cwd(), 'data');
 const DB_PATH = path.join(DB_DIR, 'oriental_crm.db');
 
 // Ensure data directory exists
-if (!fs.existsSync(DB_DIR)) {
-  fs.mkdirSync(DB_DIR, { recursive: true });
+try {
+  if (!fs.existsSync(DB_DIR)) {
+    fs.mkdirSync(DB_DIR, { recursive: true });
+  }
+} catch {
+  // Abaikan error pada sistem berkas read-only (seperti serverless Vercel)
 }
 
 // Singleton pattern — reuse connection across hot-reloads in dev
@@ -22,12 +27,23 @@ declare global {
 
 function getDb(): Database.Database {
   if (global.__db) return global.__db;
-  const db = new Database(DB_PATH);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
-  initSchema(db);
-  global.__db = db;
-  return db;
+  try {
+    const db = new Database(DB_PATH);
+    if (!isVercel) {
+      try {
+        db.pragma('journal_mode = WAL');
+      } catch {}
+    }
+    try {
+      db.pragma('foreign_keys = ON');
+    } catch {}
+    initSchema(db);
+    global.__db = db;
+    return db;
+  } catch (err) {
+    console.warn('[db.ts] Inisialisasi SQLite lokal dilewati (berjalan di cloud/serverless):', err);
+    return {} as Database.Database;
+  }
 }
 
 export const db = getDb();
