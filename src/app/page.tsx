@@ -2,9 +2,9 @@
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import {
-  Users, Store, GitMerge, FileText, TrendingUp, AlertTriangle,
+  Users, Store, GitMerge, FileText, AlertTriangle,
   RefreshCw, ChevronRight, Award, Ticket, Banknote, Calendar,
-  Filter, ArrowRight, ShieldCheck, Download, Droplets, Scale
+  Filter, Droplets
 } from "lucide-react";
 
 interface LiniBisnisStat {
@@ -109,12 +109,14 @@ export default function DashboardPage() {
       setData(json);
 
       // Auto-set default month/year if not set
-      if (json.availableMonths?.length && !selectedMonth) {
+      if (json?.availableMonths?.length && !selectedMonth) {
         setSelectedMonth(json.availableMonths[0].value);
       }
-      if (json.availableYears?.length && !selectedYear) {
+      if (json?.availableYears?.length && !selectedYear) {
         setSelectedYear(json.availableYears[0]);
       }
+    } catch (err) {
+      console.error("Gagal memuat dashboard:", err);
     } finally {
       setLoading(false);
     }
@@ -124,9 +126,19 @@ export default function DashboardPage() {
     loadData();
   }, [loadData]);
 
-  const statDraft = data?.globalStats.statementStats.find((s) => s.status === "draft")?.jumlah ?? 0;
-  const statFinal = data?.globalStats.statementStats.find((s) => s.status === "final")?.jumlah ?? 0;
-  const statRevisi = data?.globalStats.statementStats.find((s) => s.status === "perlu_revisi")?.jumlah ?? 0;
+  if (loading && !data) {
+    return (
+      <div style={{ padding: "60px 32px", textAlign: "center", color: "var(--text-muted)" }}>
+        <RefreshCw size={28} style={{ animation: "spin .7s linear infinite", margin: "0 auto 16px" }} />
+        <div style={{ fontSize: 15, fontWeight: 600, color: "var(--navy-800)" }}>Memuat ringkasan dashboard...</div>
+        <div style={{ fontSize: 13, marginTop: 4 }}>Mengambil data dari Firebase Firestore</div>
+      </div>
+    );
+  }
+
+  const statDraft = data?.globalStats?.statementStats?.find((s) => s.status === "draft")?.jumlah ?? 0;
+  const statFinal = data?.globalStats?.statementStats?.find((s) => s.status === "final")?.jumlah ?? 0;
+  const statRevisi = data?.globalStats?.statementStats?.find((s) => s.status === "perlu_revisi")?.jumlah ?? 0;
   const totalStatements = statDraft + statFinal + statRevisi;
 
   return (
@@ -204,7 +216,7 @@ export default function DashboardPage() {
                 value={selectedMonth}
                 onChange={(e) => setSelectedMonth(e.target.value)}
               >
-                {data?.availableMonths.map((m) => (
+                {data?.availableMonths?.map((m) => (
                   <option key={m.value} value={m.value}>
                     {m.label}
                   </option>
@@ -219,7 +231,7 @@ export default function DashboardPage() {
                 value={selectedYear}
                 onChange={(e) => setSelectedYear(e.target.value)}
               >
-                {data?.availableYears.map((y) => (
+                {data?.availableYears?.map((y) => (
                   <option key={y} value={y}>
                     Tahun {y}
                   </option>
@@ -248,20 +260,20 @@ export default function DashboardPage() {
             )}
 
             <div className="badge badge-menunggu" style={{ fontSize: 11, padding: "4px 10px" }}>
-              {data?.periodInfo.label || "Memuat..."}
+              {data?.periodInfo?.label || "Semua Periode"}
             </div>
           </div>
         </div>
       </div>
 
       {/* Alert: Pending Approvals */}
-      {(data?.globalStats.pendingApprovals ?? 0) > 0 && (
+      {(data?.globalStats?.pendingApprovals ?? 0) > 0 && (
         <Link href="/approvals" style={{ textDecoration: "none" }}>
           <div className="alert alert-warn" style={{ marginBottom: 16, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <AlertTriangle size={16} style={{ flexShrink: 0 }} />
               <span>
-                <strong>{data?.globalStats.pendingApprovals} item</strong> memerlukan persetujuan Owner di antrean Approval.
+                <strong>{data?.globalStats?.pendingApprovals} item</strong> memerlukan persetujuan Owner di antrean Approval.
               </span>
             </div>
             <span style={{ fontSize: 12, fontWeight: 600, textDecoration: "underline" }}>Tinjau Sekarang →</span>
@@ -270,13 +282,13 @@ export default function DashboardPage() {
       )}
 
       {/* Alert: Belum Dipetakan */}
-      {(data?.globalStats.belumPetakan ?? 0) > 0 && (
+      {(data?.globalStats?.belumPetakan ?? 0) > 0 && (
         <Link href="/aliases?belum=1" style={{ textDecoration: "none" }}>
           <div className="alert alert-info" style={{ marginBottom: 16, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <GitMerge size={16} style={{ flexShrink: 0 }} />
               <span>
-                <strong>{data?.globalStats.belumPetakan} nama POS</strong> di transaksi kasir belum dipetakan ke lini bisnis outlet mana pun.
+                <strong>{data?.globalStats?.belumPetakan} nama POS</strong> di transaksi kasir belum dipetakan ke lini bisnis outlet mana pun.
               </span>
             </div>
             <span style={{ fontSize: 12, fontWeight: 600, textDecoration: "underline" }}>Petakan Sekarang →</span>
@@ -293,15 +305,15 @@ export default function DashboardPage() {
               <Banknote size={22} style={{ color: "var(--navy-600)" }} />
             </div>
             <span className="badge badge-retail" style={{ fontSize: 10 }}>
-              {data?.totals.total_invoices ?? 0} Invoices POS
+              {data?.totals?.total_invoices ?? 0} Invoices POS
             </span>
           </div>
           <div className="stat-value" style={{ color: "var(--navy-800)" }}>
-            {loading ? "—" : fmtRp(data?.totals.total_transaksi ?? 0)}
+            {loading ? "—" : fmtRp(data?.totals?.total_transaksi ?? 0)}
           </div>
           <div className="stat-label">Total Transaksi Penjualan</div>
           <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6 }}>
-            Omzet Belanja Member ({data?.periodInfo.label})
+            Omzet Belanja Member ({data?.periodInfo?.label || "Semua Periode"})
           </div>
         </div>
 
@@ -335,7 +347,7 @@ export default function DashboardPage() {
             <span className="badge badge-grosir" style={{ fontSize: 10 }}>Point Reward</span>
           </div>
           <div className="stat-value" style={{ color: "var(--navy-800)" }}>
-            {loading ? "—" : fmt(data?.totals.total_poin ?? 0)}
+            {loading ? "—" : fmt(data?.totals?.total_poin ?? 0)}
           </div>
           <div className="stat-label">Poin Belanja POS</div>
           <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6 }}>
@@ -352,7 +364,7 @@ export default function DashboardPage() {
             <span className="badge badge-final" style={{ fontSize: 10 }}>Kupon Undian</span>
           </div>
           <div className="stat-value" style={{ color: "var(--navy-800)" }}>
-            {loading ? "—" : fmt(data?.totals.total_kupon ?? 0)}
+            {loading ? "—" : fmt(data?.totals?.total_kupon ?? 0)}
           </div>
           <div className="stat-label">Kupon Belanja Fisik</div>
           <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 6 }}>
@@ -364,11 +376,11 @@ export default function DashboardPage() {
       {/* Breakdown per Lini Bisnis */}
       <div style={{ marginBottom: 24 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)", marginBottom: 10, textTransform: "uppercase", letterSpacing: ".05em" }}>
-          Distribusi per Lini Bisnis ({data?.periodInfo.label})
+          Distribusi per Lini Bisnis ({data?.periodInfo?.label || "Semua Periode"})
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14 }}>
           {["retail", "ukm", "grosir"].map((tipe) => {
-            const stat = data?.byLiniBisnis.find((b) => b.tipe === tipe) || {
+            const stat = data?.byLiniBisnis?.find((b) => b.tipe === tipe) || {
               tipe,
               trx_count: 0,
               total_transaksi: 0,
@@ -422,14 +434,14 @@ export default function DashboardPage() {
                 </tr>
               </thead>
               <tbody>
-                {data?.topMembers.length === 0 ? (
+                {(data?.topMembers?.length ?? 0) === 0 ? (
                   <tr>
                     <td colSpan={5} style={{ textAlign: "center", padding: 30, color: "var(--text-muted)" }}>
                       Tidak ada transaksi pada periode yang dipilih
                     </td>
                   </tr>
                 ) : (
-                  data?.topMembers.map((m, idx) => (
+                  data?.topMembers?.map((m, idx) => (
                     <tr key={m.id}>
                       <td style={{ fontWeight: 700, color: idx === 0 ? "var(--gold-600)" : "var(--text-muted)" }}>
                         {idx + 1}
@@ -460,13 +472,13 @@ export default function DashboardPage() {
             <Calendar size={14} style={{ color: "var(--text-muted)" }} />
           </div>
           <div style={{ padding: "12px 16px" }}>
-            {data?.monthlyTrend.length === 0 ? (
+            {(data?.monthlyTrend?.length ?? 0) === 0 ? (
               <div style={{ textAlign: "center", padding: "24px 0", color: "var(--text-muted)", fontSize: 12 }}>
                 Tidak ada data histori bulanan
               </div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {data?.monthlyTrend.map((t) => (
+                {data?.monthlyTrend?.map((t) => (
                   <div key={t.bulan} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: "var(--bg-page)", borderRadius: 6, border: "1px solid var(--border)" }}>
                     <div>
                       <div style={{ fontWeight: 600, fontSize: 12 }}>{t.label}</div>
@@ -491,10 +503,10 @@ export default function DashboardPage() {
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 20 }}>
           {[
-            { icon: Users, label: "One Identity Terdaftar", value: data?.globalStats.totalIdentities, href: "/identities", color: "var(--navy-600)" },
-            { icon: Store, label: "Outlet Aktif", value: data?.globalStats.totalOutlets, href: "/outlets", color: "var(--info-600)" },
-            { icon: GitMerge, label: "Alias Kasir Terpetakan", value: data?.globalStats.totalAliases, href: "/aliases", color: "var(--success-600)" },
-            { icon: FileText, label: "Total Transaksi di DB", value: data?.globalStats.totalRawInvoices, href: "/import", color: "var(--warning-600)" },
+            { icon: Users, label: "One Identity Terdaftar", value: data?.globalStats?.totalIdentities, href: "/identities", color: "var(--navy-600)" },
+            { icon: Store, label: "Outlet Aktif", value: data?.globalStats?.totalOutlets, href: "/outlets", color: "var(--info-600)" },
+            { icon: GitMerge, label: "Alias Kasir Terpetakan", value: data?.globalStats?.totalAliases, href: "/aliases", color: "var(--success-600)" },
+            { icon: FileText, label: "Total Transaksi di DB", value: data?.globalStats?.totalRawInvoices, href: "/import", color: "var(--warning-600)" },
           ].map(({ icon: Icon, label, value, href, color }) => (
             <Link key={href} href={href} style={{ textDecoration: "none" }}>
               <div className="card card-hover" style={{ padding: "14px 16px", display: "flex", alignItems: "center", gap: 12 }}>
