@@ -202,7 +202,8 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
         );
       }
 
-      all.sort((a, b) => (a.nama_pemilik || '').localeCompare(b.nama_pemilik || ''));
+      // Urutkan berdasarkan ID One Identity agar nomor selalu berurutan (01, 02, 03, dst)
+      all.sort((a, b) => (a.id || '').localeCompare(b.id || ''));
       const total = all.length;
       const start = (page - 1) * limit;
       const identities = all.slice(start, start + limit);
