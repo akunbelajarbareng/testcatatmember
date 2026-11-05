@@ -54,7 +54,7 @@ export async function GET(request: NextRequest) {
     LEFT JOIN invoices inv ON inv.outlet_id = o.id AND inv.is_excluded = 0
     ${where}
     GROUP BY i.id
-    ORDER BY i.nama_pemilik
+    ORDER BY i.id ASC
     LIMIT ? OFFSET ?
   `).all(...params, limit, offset) as unknown[];
 

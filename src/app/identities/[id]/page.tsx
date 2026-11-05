@@ -504,6 +504,7 @@ export default function IdentityDetailPage({ params }: { params: Promise<{ id: s
     setOutletNama("");
     setOutletPosLama("");
     setOutletError("");
+    setOutletCustomId(`${id}-01-100`);
     setShowOutletModal(true);
 
     try {
@@ -519,14 +520,16 @@ export default function IdentityDetailPage({ params }: { params: Promise<{ id: s
   const handleOutletTipeChange = async (newTipe: "ukm" | "grosir" | "retail") => {
     setOutletTipe(newTipe);
     if (outletModalMode === "add") {
+      if (newTipe === "retail") setOutletCustomId(id);
+      else if (newTipe === "grosir") setOutletCustomId(`${id}-01-900`);
+      else setOutletCustomId(`${id}-01-100`);
+
       try {
         const res = await fetch(`/api/outlets/next-id?identity_id=${encodeURIComponent(id)}&tipe=${newTipe}`);
         const json = await res.json();
         if (json.nextId) setOutletCustomId(json.nextId);
       } catch {
-        if (newTipe === "retail") setOutletCustomId(id);
-        else if (newTipe === "grosir") setOutletCustomId(`${id}-01-900`);
-        else setOutletCustomId(`${id}-01-100`);
+        // Fallback sudah di-set di atas
       }
     }
   };
@@ -1464,9 +1467,23 @@ export default function IdentityDetailPage({ params }: { params: Promise<{ id: s
 
               {/* Nomor ID Outlet */}
               <div>
-                <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 6 }}>
-                  Nomor ID Outlet
-                </label>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)" }}>
+                    Nomor ID Outlet
+                  </label>
+                  {outletModalMode === "add" && (
+                    <button
+                      type="button"
+                      onClick={() => handleOutletTipeChange(outletTipe)}
+                      className="btn btn-secondary"
+                      style={{ padding: "2px 8px", fontSize: 11, height: "auto", display: "inline-flex", alignItems: "center", gap: 4 }}
+                      title="Generate ulang ID Outlet"
+                    >
+                      <RefreshCw size={11} />
+                      Auto ID
+                    </button>
+                  )}
+                </div>
                 <input
                   className="input"
                   style={{ fontFamily: "monospace", fontWeight: 600 }}

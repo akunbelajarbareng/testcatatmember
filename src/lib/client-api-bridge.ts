@@ -203,7 +203,7 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
       }
 
       // Urutkan berdasarkan ID One Identity agar nomor selalu berurutan (01, 02, 03, dst)
-      all.sort((a, b) => (a.id || '').localeCompare(b.id || ''));
+      all.sort((a, b) => (a.id || '').localeCompare(b.id || '', undefined, { numeric: true }));
       const total = all.length;
       const start = (page - 1) * limit;
       const identities = all.slice(start, start + limit);
@@ -262,9 +262,11 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
         await setDoc(doc(db, COLLECTIONS.OUTLETS, outletId), {
           id: outletId,
           identity_id: id,
+          nama_pemilik: namaPemilik,
           nama_outlet: namaOutlet,
           tipe: 'retail',
           aktif: 1,
+          aliases: null,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         });
@@ -534,11 +536,205 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
     };
   }
 
-  // 8. OUTLETS /api/outlets
+  // 8a. OUTLETS NEXT ID /api/outlets/next-id
+  if (pathname === '/api/outlets/next-id') {
+    const identityId = searchParams.get('identity_id') || '';
+    const tipe = (searchParams.get('tipe') || 'ukm').toLowerCase();
+
+    if (!identityId) {
+      return { status: 400, data: { error: 'identity_id wajib disertakan' } };
+    }
+
+    if (tipe === 'retail') {
+      return { data: { nextId: identityId, tipe: 'retail' } };
+    }
+
+    if (tipe === 'grosir') {
+      const nextId = `${identityId}-01-900`;
+      const snap = await getDocs(query(collection(db, COLLECTIONS.OUTLETS), where('identity_id', '==', identityId)));
+      let exists = false;
+      snap.forEach(d => {
+        if (d.id === nextId || d.data().tipe === 'grosir') exists = true;
+      });
+      return { data: { nextId, tipe: 'grosir', exists } };
+    }
+
+    // UKM ke-n: format 102-YYMMDD-NN-nn-100
+    const snap = await getDocs(query(collection(db, COLLECTIONS.OUTLETS), where('identity_id', '==', identityId)));
+    let maxSeq = 0;
+    snap.forEach(d => {
+      const docId = d.id || '';
+      const parts = docId.split('-');
+      if (parts.length >= 2 && parts[parts.length - 1] === '100') {
+        const seq = parseInt(parts[parts.length - 2], 10);
+        if (!isNaN(seq) && seq > maxSeq) {
+          maxSeq = seq;
+        }
+      }
+    });
+
+    const nextSeq = String(maxSeq + 1).padStart(2, '0');
+    const nextId = `${identityId}-${nextSeq}-100`;
+    return { data: { nextId, tipe: 'ukm', seq: maxSeq + 1 } };
+  }
+
+  // 8b. OUTLET STATUS /api/outlets/:id/status
+  if (pathname.startsWith('/api/outlets/') && pathname.endsWith('/status')) {
+    const rawId = pathname.replace('/api/outlets/', '').replace('/status', '');
+    const outletId = decodeURIComponent(rawId);
+    const action = body.action; // 'deactivate' | 'activate'
+    const alasan = body.alasan || '';
+
+    const outletRef = doc(db, COLLECTIONS.OUTLETS, outletId);
+    const snap = await getDoc(outletRef);
+    if (!snap.exists()) {
+      return { status: 404, data: { error: 'Outlet tidak ditemukan' } };
+    }
+
+    if (action === 'deactivate') {
+      await updateDoc(outletRef, {
+        aktif: 0,
+        nonaktif_tipe: 'manual',
+        nonaktif_alasan: alasan || 'Lini bisnis ditutup pemilik',
+        nonaktif_tanggal: new Date().toISOString(),
+        nonaktif_oleh: 'Admin/Owner',
+        updated_at: new Date().toISOString(),
+      });
+      return { data: { success: true, message: `Outlet ${outletId} berhasil dinonaktifkan.` } };
+    } else {
+      await updateDoc(outletRef, {
+        aktif: 1,
+        nonaktif_tipe: null,
+        nonaktif_alasan: null,
+        nonaktif_tanggal: null,
+        nonaktif_oleh: null,
+        updated_at: new Date().toISOString(),
+      });
+      return { data: { success: true, message: `Outlet ${outletId} berhasil diaktifkan kembali.` } };
+    }
+  }
+
+  // 8c. SINGLE OUTLET /api/outlets/:id (GET, PATCH, DELETE)
+  if (pathname.startsWith('/api/outlets/') && pathname !== '/api/outlets/next-id' && !pathname.endsWith('/status')) {
+    const outletId = decodeURIComponent(pathname.replace('/api/outlets/', ''));
+
+    if (method === 'GET') {
+      const snap = await getDoc(doc(db, COLLECTIONS.OUTLETS, outletId));
+      if (!snap.exists()) {
+        return { status: 404, data: { error: 'Outlet tidak ditemukan' } };
+      }
+      return { data: { outlet: snap.data(), aliases: [], invStats: { count: 0, total: 0, poin: 0, kupon: 0 } } };
+    } else if (method === 'PATCH' || method === 'PUT') {
+      const updates: any = { updated_at: new Date().toISOString() };
+      if (body.nama_outlet !== undefined) updates.nama_outlet = body.nama_outlet.trim();
+      if (body.tipe !== undefined) updates.tipe = body.tipe.toLowerCase();
+      if (body.id_pos_lama !== undefined) updates.id_pos_lama = body.id_pos_lama ? body.id_pos_lama.trim() : null;
+      if (body.aktif !== undefined) updates.aktif = body.aktif ? 1 : 0;
+
+      await updateDoc(doc(db, COLLECTIONS.OUTLETS, outletId), updates);
+      return { data: { success: true, id: outletId } };
+    } else if (method === 'DELETE') {
+      await deleteDoc(doc(db, COLLECTIONS.OUTLETS, outletId));
+      return { data: { success: true, message: `Outlet ${outletId} berhasil dihapus` } };
+    }
+  }
+
+  // 8d. OUTLETS LIST / CREATE /api/outlets
   if (pathname === '/api/outlets') {
+    if (method === 'POST') {
+      let { id: outletId, identity_id, tipe, nama_outlet, id_pos_lama } = body;
+      if (!identity_id || !nama_outlet) {
+        return { status: 400, data: { error: 'identity_id dan nama_outlet wajib diisi' } };
+      }
+      tipe = (tipe || 'ukm').toLowerCase().trim();
+      nama_outlet = (nama_outlet || '').trim();
+
+      // Dapatkan data identity
+      const idSnap = await getDoc(doc(db, COLLECTIONS.IDENTITIES, identity_id));
+      const identityData = idSnap.exists() ? idSnap.data() : null;
+
+      // Auto-generate ID jika tidak disediakan
+      if (!outletId || !outletId.trim()) {
+        if (tipe === 'retail') {
+          outletId = identity_id;
+        } else if (tipe === 'grosir') {
+          outletId = `${identity_id}-01-900`;
+        } else {
+          // UKM
+          const snap = await getDocs(query(collection(db, COLLECTIONS.OUTLETS), where('identity_id', '==', identity_id)));
+          let maxSeq = 0;
+          snap.forEach(d => {
+            const docId = d.id || '';
+            const parts = docId.split('-');
+            if (parts.length >= 2 && parts[parts.length - 1] === '100') {
+              const seq = parseInt(parts[parts.length - 2], 10);
+              if (!isNaN(seq) && seq > maxSeq) maxSeq = seq;
+            }
+          });
+          outletId = `${identity_id}-${String(maxSeq + 1).padStart(2, '0')}-100`;
+        }
+      } else {
+        outletId = outletId.trim();
+      }
+
+      // Validasi konflik ID
+      const existing = await getDoc(doc(db, COLLECTIONS.OUTLETS, outletId));
+      if (existing.exists()) {
+        return { status: 400, data: { error: `ID Outlet "${outletId}" sudah terdaftar` } };
+      }
+
+      const newOutlet = {
+        id: outletId,
+        identity_id,
+        nama_pemilik: identityData?.nama_pemilik || '',
+        tipe,
+        nama_outlet,
+        id_pos_lama: id_pos_lama ? String(id_pos_lama).trim() : null,
+        aktif: 1,
+        aliases: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      await setDoc(doc(db, COLLECTIONS.OUTLETS, outletId), newOutlet);
+      return { data: { success: true, outlet: newOutlet } };
+    }
+
+    // GET /api/outlets
+    const q = (searchParams.get('q') || '').toLowerCase().trim();
+    const status = (searchParams.get('status') || '').toLowerCase();
+    const identityId = searchParams.get('identity_id') || '';
+
     const snap = await getDocs(collection(db, COLLECTIONS.OUTLETS));
-    const outlets: any[] = [];
-    snap.forEach(d => outlets.push(d.data()));
+    let outlets: any[] = [];
+    snap.forEach(d => {
+      const o = d.data();
+      outlets.push({
+        ...o,
+        total_transaksi: o.total_transaksi || 0,
+        total_poin: o.total_poin || 0,
+        total_kupon: o.total_kupon || 0,
+        aliases: o.aliases || null,
+      });
+    });
+
+    if (identityId) {
+      outlets = outlets.filter(o => o.identity_id === identityId);
+    }
+    if (status === 'aktif') {
+      outlets = outlets.filter(o => o.aktif === 1);
+    } else if (status === 'nonaktif') {
+      outlets = outlets.filter(o => o.aktif === 0);
+    }
+    if (q) {
+      outlets = outlets.filter(
+        o => (o.nama_outlet && o.nama_outlet.toLowerCase().includes(q)) ||
+             (o.id && o.id.toLowerCase().includes(q)) ||
+             (o.nama_pemilik && o.nama_pemilik.toLowerCase().includes(q))
+      );
+    }
+
+    outlets.sort((a, b) => (a.id || '').localeCompare(b.id || '', undefined, { numeric: true }));
     return { data: { outlets } };
   }
 

@@ -49,8 +49,11 @@ export default function IdentitiesPage() {
     const params = new URLSearchParams({ q, page: String(page), limit: String(pageSize) });
     const res = await fetch(`/api/identities?${params}`);
     const json = await res.json();
-    setItems(json.identities || []);
-    setTotal(json.total || 0);
+    const rawList: Identity[] = json.identities || [];
+    // Urutkan selalu berdasarkan ID One Identity (01, 02, 03, dst)
+    const sorted = [...rawList].sort((a, b) => (a.id || '').localeCompare(b.id || '', undefined, { numeric: true }));
+    setItems(sorted);
+    setTotal(json.total || sorted.length);
     setLoading(false);
   }, [q, page]);
 
