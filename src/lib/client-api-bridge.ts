@@ -209,10 +209,46 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
 
       return { data: { identities, total, page, limit } };
     } else if (method === 'POST') {
-      const id = body.id || `102-${Date.now().toString().slice(-6)}-01`;
+      let id = (body.id || '').trim();
+      const namaPemilik = (body.nama_pemilik || '').trim();
+
+      // Hitung prefix hari ini (102-YYMMDD-)
+      const now = new Date();
+      const yy = String(now.getFullYear()).slice(2);
+      const mm = String(now.getMonth() + 1).padStart(2, '0');
+      const dd = String(now.getDate()).padStart(2, '0');
+      const prefix = `102-${yy}${mm}${dd}-`;
+
+      // Cek apakah ID sudah terpakai di Firestore
+      const snap = await getDocs(collection(db, COLLECTIONS.IDENTITIES));
+      let maxSeq = 0;
+      let conflict = false;
+
+      snap.forEach((d) => {
+        const docId = d.id || '';
+        if (docId === id) {
+          conflict = true;
+        }
+        if (docId.startsWith(prefix)) {
+          const parts = docId.split('-');
+          if (parts.length >= 3) {
+            const seq = parseInt(parts[2], 10);
+            if (!isNaN(seq) && seq > maxSeq) {
+              maxSeq = seq;
+            }
+          }
+        }
+      });
+
+      // Jika ID kosong atau sudah terpakai (conflict), naikkan sequence otomatis agar akun lama TIDAK tertimpa!
+      if (!id || conflict) {
+        id = `${prefix}${String(maxSeq + 1).padStart(2, '0')}`;
+      }
+
       await setDoc(doc(db, COLLECTIONS.IDENTITIES, id), {
         ...body,
         id,
+        nama_pemilik: namaPemilik,
         status: 'aktif',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -221,7 +257,7 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
       // Buat default outlet Retail jika opsi dicentang (PRD 4.2)
       if (body.create_retail_outlet) {
         const outletId = id;
-        const namaOutlet = body.retail_name?.trim() || `${body.nama_pemilik} - RETAIL`;
+        const namaOutlet = body.retail_name?.trim() || `${namaPemilik} - RETAIL`;
         await setDoc(doc(db, COLLECTIONS.OUTLETS, outletId), {
           id: outletId,
           identity_id: id,
@@ -233,14 +269,36 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
         });
       }
 
-      return { data: { success: true, id, nama_pemilik: body.nama_pemilik, identity: { id, ...body } } };
+      return { data: { success: true, id, nama_pemilik: namaPemilik, identity: { id, ...body, nama_pemilik: namaPemilik } } };
     }
   }
 
   // 4. IDENTITIES NEXT ID /api/identities/next-id
   if (pathname === '/api/identities/next-id') {
-    const dateStr = new Date().toISOString().slice(2, 10).replace(/-/g, '');
-    return { data: { nextId: `102-${dateStr}-01` } };
+    const now = new Date();
+    const yy = String(now.getFullYear()).slice(2);
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    const prefix = `102-${yy}${mm}${dd}-`;
+
+    const snap = await getDocs(collection(db, COLLECTIONS.IDENTITIES));
+    let maxSeq = 0;
+    snap.forEach((d) => {
+      const docId = d.id || '';
+      if (docId.startsWith(prefix)) {
+        const parts = docId.split('-');
+        if (parts.length >= 3) {
+          const seq = parseInt(parts[2], 10);
+          if (!isNaN(seq) && seq > maxSeq) {
+            maxSeq = seq;
+          }
+        }
+      }
+    });
+
+    const nextSeq = String(maxSeq + 1).padStart(2, '0');
+    const nextId = `${prefix}${nextSeq}`;
+    return { data: { nextId, seq: maxSeq + 1 } };
   }
 
   // 4b. SINGLE IDENTITY /api/identities/:id
