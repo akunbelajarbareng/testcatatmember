@@ -212,10 +212,27 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
       await setDoc(doc(db, COLLECTIONS.IDENTITIES, id), {
         ...body,
         id,
+        status: 'aktif',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       });
-      return { data: { success: true, identity: { id, ...body } } };
+
+      // Buat default outlet Retail jika opsi dicentang (PRD 4.2)
+      if (body.create_retail_outlet) {
+        const outletId = id;
+        const namaOutlet = body.retail_name?.trim() || `${body.nama_pemilik} - RETAIL`;
+        await setDoc(doc(db, COLLECTIONS.OUTLETS, outletId), {
+          id: outletId,
+          identity_id: id,
+          nama_outlet: namaOutlet,
+          tipe: 'retail',
+          aktif: 1,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+      }
+
+      return { data: { success: true, id, nama_pemilik: body.nama_pemilik, identity: { id, ...body } } };
     }
   }
 
