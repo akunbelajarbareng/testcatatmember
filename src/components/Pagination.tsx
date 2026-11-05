@@ -51,7 +51,7 @@ export default function Pagination({
       <div className="font-medium text-slate-600">
         Menampilkan <span className="font-bold text-slate-900">{start}</span> –{" "}
         <span className="font-bold text-slate-900">{end}</span> dari{" "}
-        <span className="font-bold text-slate-900">{totalItems.toLocaleString("id-ID")}</span> {itemLabel}
+        <span className="font-bold text-slate-900">{(totalItems || 0).toLocaleString("id-ID")}</span> {itemLabel}
       </div>
 
       {/* Buttons */}

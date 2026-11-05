@@ -9,7 +9,7 @@ import {
   Power, PowerOff
 } from "lucide-react";
 
-function fmt(n: number) { return n.toLocaleString("id-ID"); }
+function fmt(n: number) { return (n || 0).toLocaleString("id-ID"); }
 function fmtRp(n: number) { return `Rp ${fmt(n)}`; }
 
 interface Identity {

@@ -22,7 +22,7 @@ const BULAN_ID: Record<string, string> = {
   "07":"Jul","08":"Agu","09":"Sep","10":"Okt","11":"Nov","12":"Des",
 };
 
-function fmt(n: number) { return n.toLocaleString("id-ID"); }
+function fmt(n: number) { return (n || 0).toLocaleString("id-ID"); }
 function fmtRp(n: number) {
   if (n >= 1_000_000) return `${(n/1_000_000).toFixed(1)} Jt`;
   return `${fmt(n)}`;

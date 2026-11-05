@@ -119,3 +119,4 @@ updateRules().catch(err => {
   console.error('\n❌ Gagal:', err.message);
   process.exit(1);
 });
+

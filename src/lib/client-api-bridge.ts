@@ -12,6 +12,7 @@ import {
   setDoc,
   addDoc,
   updateDoc,
+  deleteDoc,
   query,
   where,
   limit as firestoreLimit,
@@ -240,6 +241,68 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
   if (pathname === '/api/identities/next-id') {
     const dateStr = new Date().toISOString().slice(2, 10).replace(/-/g, '');
     return { data: { nextId: `102-${dateStr}-01` } };
+  }
+
+  // 4b. SINGLE IDENTITY /api/identities/:id
+  if (pathname.startsWith('/api/identities/') && pathname !== '/api/identities/next-id' && pathname !== '/api/identities/export') {
+    const targetId = decodeURIComponent(pathname.replace('/api/identities/', ''));
+
+    if (method === 'GET') {
+      const docSnap = await getDoc(doc(db, COLLECTIONS.IDENTITIES, targetId));
+      if (!docSnap.exists()) {
+        return { status: 404, data: { error: 'Identity tidak ditemukan' } };
+      }
+      const identity = docSnap.data();
+
+      // Cari outlets milik identity ini
+      const outletsSnap = await getDocs(query(collection(db, COLLECTIONS.OUTLETS), where('identity_id', '==', targetId)));
+      const outlets: any[] = [];
+      outletsSnap.forEach(d => outlets.push(d.data()));
+
+      // Cari statements milik identity ini
+      const statementsSnap = await getDocs(query(collection(db, COLLECTIONS.STATEMENTS), where('identity_id', '==', targetId)));
+      const statements: any[] = [];
+      statementsSnap.forEach(d => statements.push(d.data()));
+
+      return {
+        data: {
+          identity,
+          outlets,
+          exclusions: [],
+          statements,
+        },
+      };
+    } else if (method === 'PATCH' || method === 'PUT') {
+      await updateDoc(doc(db, COLLECTIONS.IDENTITIES, targetId), {
+        ...body,
+        updated_at: new Date().toISOString(),
+      });
+      return { data: { success: true, id: targetId } };
+    } else if (method === 'DELETE') {
+      await deleteDoc(doc(db, COLLECTIONS.IDENTITIES, targetId));
+      return { data: { success: true, message: `Identity ${targetId} berhasil dihapus` } };
+    }
+  }
+
+  // 4c. PENALTIES /api/penalties/:id
+  if (pathname.startsWith('/api/penalties/')) {
+    return {
+      data: {
+        success: true,
+        data: {
+          is_suspended: false,
+          history: [],
+        },
+      },
+    };
+  }
+
+  // 4d. ALIASES /api/aliases
+  if (pathname === '/api/aliases') {
+    const snap = await getDocs(collection(db, COLLECTIONS.POS_ALIASES));
+    const aliases: any[] = [];
+    snap.forEach(d => aliases.push(d.data()));
+    return { data: { aliases, rows: aliases } };
   }
 
   // 5. COUPONS LOOKUP /api/coupons/lookup

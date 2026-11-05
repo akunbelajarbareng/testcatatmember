@@ -16,7 +16,7 @@ interface Identity {
   total_kupon: number;
 }
 
-function fmt(n: number) { return n.toLocaleString("id-ID"); }
+function fmt(n: number) { return (n || 0).toLocaleString("id-ID"); }
 
 export default function IdentitiesPage() {
   const router = useRouter();

@@ -15,7 +15,7 @@ interface OutletOption {
   id: string; nama_outlet: string; tipe: string; nama_pemilik: string; identity_id: string;
 }
 
-function fmt(n: number) { return n.toLocaleString("id-ID"); }
+function fmt(n: number) { return (n || 0).toLocaleString("id-ID"); }
 function fmtRp(n: number) { return `Rp ${fmt(n)}`; }
 
 export default function AliasesPage() {

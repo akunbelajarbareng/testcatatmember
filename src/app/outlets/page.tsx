@@ -21,7 +21,7 @@ interface Outlet {
   total_kupon: number;
 }
 
-function fmt(n: number) { return n.toLocaleString("id-ID"); }
+function fmt(n: number) { return (n || 0).toLocaleString("id-ID"); }
 function fmtRp(n: number) { return `Rp ${fmt(n)}`; }
 
 export default function OutletsPage() {
