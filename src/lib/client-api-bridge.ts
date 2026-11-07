@@ -1978,8 +1978,8 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
   if (pathname.startsWith('/api/approvals/') && pathname.endsWith('/resolve') && method === 'POST') {
     const rawId = pathname.replace('/api/approvals/', '').replace('/resolve', '');
     const approvalId = decodeURIComponent(rawId);
-    const keputusan = body.keputusan; // 'approve' | 'reject' | 'ignore'
-    const targetOutletId = body.outletId;
+    const rawKeputusan = (body.keputusan || '').toLowerCase().trim();
+    const targetOutletId = (body.data?.outlet_id || body.outletId || body.data?.outletId || '').trim();
 
     const apprRef = doc(db, COLLECTIONS.APPROVALS, approvalId);
     const snap = await getDoc(apprRef);
@@ -1988,26 +1988,146 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
     }
     const apprData = snap.data();
 
-    const statusVal = keputusan === 'approve' ? 'disetujui' : keputusan === 'reject' ? 'ditolak' : 'diabaikan';
+    const statusVal =
+      rawKeputusan === 'disetujui' || rawKeputusan === 'approve' || rawKeputusan === 'setuju'
+        ? 'disetujui'
+        : rawKeputusan === 'ditolak' || rawKeputusan === 'reject' || rawKeputusan === 'tolak'
+        ? 'ditolak'
+        : 'diabaikan';
+
     await updateDoc(apprRef, {
       status: statusVal,
+      resolved_at: new Date().toISOString(),
+      resolved_by: getActiveUser()?.username || 'admin',
       updated_at: new Date().toISOString(),
     });
 
-    // Jika approve dan ada outlet_id, petakan kode/nama
-    if (keputusan === 'approve' && targetOutletId && apprData.payload) {
+    // Jika disetujui dan ada outlet_id, petakan kode/nama dan update faktur secara berlaku surut
+    if (statusVal === 'disetujui' && targetOutletId && apprData.payload) {
       const payload = typeof apprData.payload === 'string' ? JSON.parse(apprData.payload) : apprData.payload;
-      const namaPos = payload.nama || payload.nama_pos;
+      const namaPos = payload.nama_pos || payload.nama;
+
       if (namaPos) {
-        const aliasId = `alias_${String(namaPos).toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
-        await setDoc(doc(db, COLLECTIONS.POS_ALIASES, aliasId), {
-          id: aliasId,
-          nama_pos: namaPos,
-          outlet_id: targetOutletId,
-          created_at: new Date().toISOString(),
-        }, { merge: true });
+        const outSnap = await getDoc(doc(db, COLLECTIONS.OUTLETS, targetOutletId));
+        if (outSnap.exists()) {
+          const outletData = outSnap.data();
+
+          // 1. Simpan ke pos_aliases
+          const aliasId = `alias_${String(namaPos).toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+          await setDoc(doc(db, COLLECTIONS.POS_ALIASES, aliasId), {
+            id: aliasId,
+            nama_pos: namaPos,
+            outlet_id: targetOutletId,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          }, { merge: true });
+
+          // 2. Update SEMUA faktur transaksi dengan nama_pos ini secara berlaku surut
+          const invSnap = await getDocs(query(collection(db, COLLECTIONS.INVOICES), where('nama_pos', '==', namaPos)));
+          let currentBatch = writeBatch(db);
+          let opCount = 0;
+          let addedPoin = 0;
+          let addedKupon = 0;
+          let addedTrx = 0;
+
+          const rate = outletData.tipe === 'grosir' ? 200000 : outletData.tipe === 'ukm' ? 50000 : 100000;
+
+          invSnap.forEach(d => {
+            const inv = d.data();
+            const jumlah = Number(inv.jumlah) || 0;
+            const poin = Math.floor(jumlah / rate);
+            const kupon = Math.floor(jumlah / 150000);
+
+            currentBatch.update(d.ref, {
+              outlet_id: targetOutletId,
+              identity_id: outletData.identity_id,
+              poin,
+              kupon,
+              is_excluded: 0,
+              updated_at: new Date().toISOString(),
+            });
+            opCount++;
+            addedTrx += jumlah;
+            addedPoin += poin;
+            addedKupon += kupon;
+          });
+
+          if (opCount > 0) {
+            await currentBatch.commit();
+          }
+
+          // 3. Akumulasikan ke outlet & identity
+          if (addedPoin > 0 || addedKupon > 0 || addedTrx > 0) {
+            await updateDoc(doc(db, COLLECTIONS.OUTLETS, targetOutletId), {
+              total_transaksi: (outletData.total_transaksi || 0) + addedTrx,
+              total_poin: (outletData.total_poin || 0) + addedPoin,
+              total_kupon: (outletData.total_kupon || 0) + addedKupon,
+              updated_at: new Date().toISOString(),
+            });
+            if (outletData.identity_id) {
+              const idRef = doc(db, COLLECTIONS.IDENTITIES, outletData.identity_id);
+              const idSnap = await getDoc(idRef);
+              if (idSnap.exists()) {
+                const idData = idSnap.data();
+                await updateDoc(idRef, {
+                  total_poin: (idData.total_poin || 0) + addedPoin,
+                  total_kupon: (idData.total_kupon || 0) + addedKupon,
+                  updated_at: new Date().toISOString(),
+                });
+              }
+            }
+          }
+        }
+      }
+    } else if (statusVal === 'disetujui' && apprData.jenis === 'outlet_tanpa_induk' && apprData.payload) {
+      const payload = typeof apprData.payload === 'string' ? JSON.parse(apprData.payload) : apprData.payload;
+      if (payload.kode && payload.parent) {
+        const parentSnap = await getDoc(doc(db, COLLECTIONS.IDENTITIES, payload.parent));
+        if (parentSnap.exists()) {
+          const outRef = doc(db, COLLECTIONS.OUTLETS, payload.kode);
+          const outSnap = await getDoc(outRef);
+          if (!outSnap.exists()) {
+            await setDoc(outRef, {
+              id: payload.kode,
+              identity_id: payload.parent,
+              nama_outlet: payload.nama || payload.kode,
+              tipe: payload.tipe || 'ukm',
+              aktif: 1,
+              total_transaksi: 0,
+              total_poin: 0,
+              total_kupon: 0,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            });
+          }
+        }
+      }
+    } else if (statusVal === 'disetujui' && apprData.jenis === 'transaksi_outlet_nonaktif' && apprData.payload) {
+      const payload = typeof apprData.payload === 'string' ? JSON.parse(apprData.payload) : apprData.payload;
+      if (payload.outlet_id) {
+        await updateDoc(doc(db, COLLECTIONS.OUTLETS, payload.outlet_id), {
+          aktif: 1,
+          nonaktif_tipe: null,
+          nonaktif_alasan: null,
+          nonaktif_tanggal: null,
+          nonaktif_oleh: null,
+          updated_at: new Date().toISOString(),
+        });
       }
     }
+
+    // Catat ke audit_log
+    try {
+      const auditRef = doc(collection(db, COLLECTIONS.AUDIT_LOG));
+      await setDoc(auditRef, {
+        id: auditRef.id,
+        tipe: 'approval_resolved',
+        entity_id: approvalId,
+        user_id: getActiveUser()?.username || 'admin',
+        keterangan: `Approval ${approvalId} (${apprData.jenis}) diselesaikan: ${statusVal}${targetOutletId ? ` -> outlet ${targetOutletId}` : ''}`,
+        created_at: new Date().toISOString(),
+      });
+    } catch {}
 
     return { data: { success: true, message: `Approval ${approvalId} berhasil diselesaikan` } };
   }
