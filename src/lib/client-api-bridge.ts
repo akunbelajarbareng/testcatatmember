@@ -2334,6 +2334,379 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
     };
   }
 
+  // 5c. COUPONS HANDOVER /api/coupons/handover
+  if (pathname === '/api/coupons/handover' && method === 'POST') {
+    const {
+      identity_id,
+      outlet_asal_id,
+      periode_kupon,
+      petugas,
+      whatsapp,
+      keterangan,
+      mode,
+      bundle_numbers,
+      range,
+      custom_numbers,
+    } = body;
+
+    if (!identity_id) return { status: 400, data: { error: 'Nomor Member (Identity ID) wajib diisi' } };
+    if (!outlet_asal_id) return { status: 400, data: { error: 'Outlet Asal wajib dipilih' } };
+    if (!periode_kupon || !/^\d{4}-\d{2}$/.test(periode_kupon)) {
+      return { status: 400, data: { error: 'Format periode kupon harus YYYY-MM (misal 2026-09)' } };
+    }
+    if (!petugas || !petugas.trim()) return { status: 400, data: { error: 'Nama petugas yang menyerahkan wajib diisi' } };
+
+    // 0. Cek sanksi member
+    const idSnap = await getDoc(doc(db, COLLECTIONS.IDENTITIES, identity_id));
+    if (!idSnap.exists()) return { status: 404, data: { error: 'Member tidak ditemukan' } };
+    const idData = idSnap.data();
+
+    if (idData.is_suspended === 1) {
+      return {
+        status: 400,
+        data: {
+          error: `Member sedang dalam masa sanksi penangguhan (${idData.suspend_reason || 'Evaluasi Khusus'}). Penyerahan kupon fisik diblokir.`,
+        },
+      };
+    }
+
+    // 1. Cek Kuota
+    const invSnap = await getDocs(query(collection(db, COLLECTIONS.INVOICES), where('identity_id', '==', identity_id)));
+    let hakKupon = 0;
+    invSnap.forEach(d => {
+      const inv = d.data();
+      if (inv.is_excluded !== 1) hakKupon += (Number(inv.kupon) || 0);
+    });
+
+    const coupSnap = await getDocs(query(collection(db, COLLECTIONS.COUPONS), where('identity_id', '==', identity_id), where('status', '==', 'aktif')));
+    const sudahDiambil = coupSnap.size;
+    const sisaKuota = Math.max(0, hakKupon - sudahDiambil);
+
+    if (sisaKuota <= 0) {
+      return {
+        status: 400,
+        data: {
+          error: `Member tidak memiliki sisa hak kuota kupon (sisa kuota: 0 lembar dari total ${hakKupon} hak). Penyerahan kupon ditolak.`,
+        },
+      };
+    }
+
+    // 2. Resolve nomor kupon yang diminta
+    const seqSet = new Set<number>();
+    if (mode === 'bundle') {
+      const bundles = bundle_numbers || [];
+      if (bundles.length === 0) return { status: 400, data: { error: 'Pilih minimal satu nomor bundel' } };
+      for (const b of bundles) {
+        if (b < 1 || b > 50) return { status: 400, data: { error: `Nomor bundel tidak valid: ${b}` } };
+        const start = (b - 1) * 50 + 1;
+        const end = b * 50;
+        for (let s = start; s <= end; s++) seqSet.add(s);
+      }
+    } else if (mode === 'range') {
+      const { start, end } = range || { start: 0, end: 0 };
+      if (!start || !end) return { status: 400, data: { error: 'Nomor awal dan nomor akhir wajib diisi' } };
+      if (start <= 0 || end <= 0) return { status: 400, data: { error: 'Nomor urut kupon harus > 0' } };
+      if (start > end) return { status: 400, data: { error: `Nomor awal (${start}) tidak boleh > nomor akhir (${end})` } };
+      if (end - start + 1 > 1000) return { status: 400, data: { error: 'Maksimal 1.000 kupon dalam satu kali submit' } };
+      for (let s = start; s <= end; s++) seqSet.add(s);
+    } else if (mode === 'custom') {
+      const nums = custom_numbers || [];
+      if (nums.length === 0) return { status: 400, data: { error: 'Daftar nomor kupon eceran tidak boleh kosong' } };
+      for (const s of nums) {
+        if (s <= 0) return { status: 400, data: { error: `Nomor kupon tidak valid: ${s}` } };
+        seqSet.add(s);
+      }
+    } else {
+      return { status: 400, data: { error: `Mode input kupon tidak dikenal: ${mode}` } };
+    }
+
+    const seqs = Array.from(seqSet).sort((a, b) => a - b);
+    if (seqs.length === 0) return { status: 400, data: { error: 'Tidak ada kupon yang dihasilkan dari pilihan Anda' } };
+
+    if (seqs.length > sisaKuota) {
+      return {
+        status: 400,
+        data: {
+          error: `Jumlah kupon yang diserahkan (${seqs.length} lembar) melebihi sisa hak kuota member (${sisaKuota} lembar). Batas maksimal yang boleh diserahkan adalah ${sisaKuota} lembar.`,
+        },
+      };
+    }
+
+    const [yyyy, mm] = periode_kupon.split('-');
+    const yy = (yyyy || '2026').slice(-2);
+    const m = (mm || '09').padStart(2, '0');
+    const prefix = `ORT-KUP${yy}${m}-`;
+    const numbers = seqs.map(s => `${prefix}${String(s).padStart(4, '0')}`);
+
+    // 3. Validasi Anti-Duplikasi
+    const activeCouponsPeriode = await getDocs(query(collection(db, COLLECTIONS.COUPONS), where('periode_kupon', '==', periode_kupon), where('status', '==', 'aktif')));
+    const activeNumbers = new Set<string>();
+    activeCouponsPeriode.forEach(d => {
+      const c = d.data();
+      if (c.nomor_kupon) activeNumbers.add(c.nomor_kupon);
+    });
+
+    const conflicts = numbers.filter(n => activeNumbers.has(n));
+    if (conflicts.length > 0) {
+      const contoh = conflicts.slice(0, 3).join(', ');
+      const sisa = conflicts.length > 3 ? ` dan ${conflicts.length - 3} kupon lainnya` : '';
+      return {
+        status: 400,
+        data: { error: `Ditemukan ${conflicts.length} kupon yang sudah pernah diserahkan: ${contoh}${sisa}` },
+      };
+    }
+
+    // 4. Batch write ke Firestore
+    const batchDocRef = doc(collection(db, COLLECTIONS.COUPON_BATCHES));
+    const batchId = batchDocRef.id;
+    const nowIso = new Date().toISOString();
+    const todayStr = nowIso.slice(0, 10);
+
+    await setDoc(batchDocRef, {
+      id: batchId,
+      identity_id,
+      outlet_asal_id,
+      periode_kupon,
+      jumlah_kupon: numbers.length,
+      nomor_awal: numbers[0],
+      nomor_akhir: numbers[numbers.length - 1],
+      keterangan: keterangan || (mode === 'bundle' ? `Bundel ${bundle_numbers?.join(',')}` : null),
+      petugas: petugas.trim(),
+      whatsapp: whatsapp?.trim() || idData.whatsapp || null,
+      status: 'aktif',
+      tipe_penerima: 'member',
+      created_at: nowIso,
+    });
+
+    let currentBatch = writeBatch(db);
+    let opCount = 0;
+
+    for (let i = 0; i < numbers.length; i++) {
+      const num = numbers[i];
+      const seq = seqs[i];
+      const cRef = doc(db, COLLECTIONS.COUPONS, num);
+      currentBatch.set(cRef, {
+        id: num,
+        nomor_kupon: num,
+        identity_id,
+        outlet_asal_id,
+        batch_id: batchId,
+        periode_kupon,
+        nomor_urut: seq,
+        status: 'aktif',
+        petugas: petugas.trim(),
+        whatsapp: whatsapp?.trim() || idData.whatsapp || null,
+        tanggal_serah: todayStr,
+        tipe_penerima: 'member',
+        created_at: nowIso,
+      });
+      opCount++;
+      if (opCount >= 400) {
+        await currentBatch.commit();
+        currentBatch = writeBatch(db);
+        opCount = 0;
+      }
+    }
+    if (opCount > 0) {
+      await currentBatch.commit();
+    }
+
+    // Update whatsapp jika diisi
+    if (whatsapp && whatsapp.trim()) {
+      await updateDoc(doc(db, COLLECTIONS.IDENTITIES, identity_id), {
+        whatsapp: whatsapp.trim(),
+        updated_at: nowIso,
+      });
+    }
+
+    // Audit log
+    try {
+      const auditRef = doc(collection(db, COLLECTIONS.AUDIT_LOG));
+      await setDoc(auditRef, {
+        id: auditRef.id,
+        tipe: 'handover_coupon',
+        entity_id: batchId,
+        user_id: petugas.trim() || 'admin',
+        keterangan: `Serah terima ${numbers.length} kupon (${numbers[0]} - ${numbers[numbers.length - 1]}) kepada member ${idData.nama_pemilik} (${identity_id}) oleh ${petugas.trim()}`,
+        created_at: nowIso,
+      });
+    } catch {}
+
+    return {
+      data: {
+        success: true,
+        data: {
+          batch_id: batchId,
+          total_issued: numbers.length,
+          nomor_awal: numbers[0],
+          nomor_akhir: numbers[numbers.length - 1],
+          coupons: numbers,
+        },
+      },
+    };
+  }
+
+  // 5d. COUPONS WALK-IN /api/coupons/walk-in
+  if (pathname === '/api/coupons/walk-in' && method === 'POST') {
+    const {
+      periode_kupon,
+      nama_walk_in,
+      no_hp_walk_in,
+      no_invoice,
+      petugas,
+      keterangan,
+      mode,
+      range,
+      custom_numbers,
+    } = body;
+
+    if (!nama_walk_in || !nama_walk_in.trim()) {
+      return { status: 400, data: { error: 'Nama pelanggan pembeli (walk-in) wajib diisi' } };
+    }
+    if (!petugas || !petugas.trim()) {
+      return { status: 400, data: { error: 'Nama kasir / petugas yang menyerahkan wajib diisi' } };
+    }
+    if (!periode_kupon || !/^\d{4}-\d{2}$/.test(periode_kupon)) {
+      return { status: 400, data: { error: 'Format periode kupon harus YYYY-MM (misal 2026-10)' } };
+    }
+
+    const seqSet = new Set<number>();
+    if (mode === 'range') {
+      const { start, end } = range || { start: 0, end: 0 };
+      if (!start || !end) return { status: 400, data: { error: 'Nomor awal dan nomor akhir wajib diisi' } };
+      if (start <= 0 || end <= 0) return { status: 400, data: { error: 'Nomor urut kupon harus > 0' } };
+      if (start > end) return { status: 400, data: { error: `Nomor awal (${start}) tidak boleh > nomor akhir (${end})` } };
+      if (end - start + 1 > 1000) return { status: 400, data: { error: 'Maksimal 1.000 kupon dalam satu kali submit' } };
+      for (let s = start; s <= end; s++) seqSet.add(s);
+    } else if (mode === 'custom') {
+      const nums = custom_numbers || [];
+      if (nums.length === 0) return { status: 400, data: { error: 'Daftar nomor kupon eceran tidak boleh kosong' } };
+      for (const s of nums) {
+        if (s <= 0) return { status: 400, data: { error: `Nomor kupon tidak valid: ${s}` } };
+        seqSet.add(s);
+      }
+    } else {
+      return { status: 400, data: { error: `Mode input kupon tidak dikenal: ${mode}` } };
+    }
+
+    const seqs = Array.from(seqSet).sort((a, b) => a - b);
+    if (seqs.length === 0) return { status: 400, data: { error: 'Tidak ada kupon yang dihasilkan dari pilihan Anda' } };
+
+    const [yyyy, mm] = periode_kupon.split('-');
+    const yy = (yyyy || '2026').slice(-2);
+    const m = (mm || '09').padStart(2, '0');
+    const prefix = `ORT-KUP${yy}${m}-`;
+    const numbers = seqs.map(s => `${prefix}${String(s).padStart(4, '0')}`);
+
+    // Anti-duplikasi
+    const activeCouponsPeriode = await getDocs(query(collection(db, COLLECTIONS.COUPONS), where('periode_kupon', '==', periode_kupon), where('status', '==', 'aktif')));
+    const activeNumbers = new Set<string>();
+    activeCouponsPeriode.forEach(d => {
+      const c = d.data();
+      if (c.nomor_kupon) activeNumbers.add(c.nomor_kupon);
+    });
+
+    const conflicts = numbers.filter(n => activeNumbers.has(n));
+    if (conflicts.length > 0) {
+      const contoh = conflicts.slice(0, 3).join(', ');
+      const sisa = conflicts.length > 3 ? ` dan ${conflicts.length - 3} kupon lainnya` : '';
+      return {
+        status: 400,
+        data: { error: `Ditemukan ${conflicts.length} kupon yang sudah pernah diserahkan: ${contoh}${sisa}` },
+      };
+    }
+
+    const batchDocRef = doc(collection(db, COLLECTIONS.COUPON_BATCHES));
+    const batchId = batchDocRef.id;
+    const nowIso = new Date().toISOString();
+    const todayStr = nowIso.slice(0, 10);
+    const cleanNama = nama_walk_in.trim();
+    const cleanHp = no_hp_walk_in?.trim() || null;
+    const cleanInvoice = no_invoice?.trim() || null;
+    const cleanPetugas = petugas.trim();
+    const batchNote = keterangan?.trim() || (cleanInvoice ? `Struk POS: ${cleanInvoice}` : 'Transaksi Tunai Walk-In');
+
+    await setDoc(batchDocRef, {
+      id: batchId,
+      identity_id: '999-CASH-WALKIN',
+      outlet_asal_id: '999-CASH-WALKIN-01',
+      periode_kupon,
+      jumlah_kupon: numbers.length,
+      nomor_awal: numbers[0],
+      nomor_akhir: numbers[numbers.length - 1],
+      keterangan: batchNote,
+      petugas: cleanPetugas,
+      whatsapp: cleanHp,
+      status: 'aktif',
+      tipe_penerima: 'walk_in',
+      nama_walk_in: cleanNama,
+      no_hp_walk_in: cleanHp,
+      no_invoice: cleanInvoice,
+      created_at: nowIso,
+    });
+
+    let currentBatch = writeBatch(db);
+    let opCount = 0;
+
+    for (let i = 0; i < numbers.length; i++) {
+      const num = numbers[i];
+      const seq = seqs[i];
+      const cRef = doc(db, COLLECTIONS.COUPONS, num);
+      currentBatch.set(cRef, {
+        id: num,
+        nomor_kupon: num,
+        identity_id: '999-CASH-WALKIN',
+        outlet_asal_id: '999-CASH-WALKIN-01',
+        batch_id: batchId,
+        periode_kupon,
+        nomor_urut: seq,
+        status: 'aktif',
+        petugas: cleanPetugas,
+        whatsapp: cleanHp,
+        tanggal_serah: todayStr,
+        tipe_penerima: 'walk_in',
+        nama_walk_in: cleanNama,
+        no_hp_walk_in: cleanHp,
+        no_invoice: cleanInvoice,
+        created_at: nowIso,
+      });
+      opCount++;
+      if (opCount >= 400) {
+        await currentBatch.commit();
+        currentBatch = writeBatch(db);
+        opCount = 0;
+      }
+    }
+    if (opCount > 0) {
+      await currentBatch.commit();
+    }
+
+    try {
+      const auditRef = doc(collection(db, COLLECTIONS.AUDIT_LOG));
+      await setDoc(auditRef, {
+        id: auditRef.id,
+        tipe: 'handover_walkin_coupon',
+        entity_id: batchId,
+        user_id: cleanPetugas || 'admin',
+        keterangan: `Serah terima walk-in ${numbers.length} kupon (${numbers[0]} - ${numbers[numbers.length - 1]}) atas nama ${cleanNama}`,
+        created_at: nowIso,
+      });
+    } catch {}
+
+    return {
+      data: {
+        success: true,
+        data: {
+          batch_id: batchId,
+          total_issued: numbers.length,
+          nomor_awal: numbers[0],
+          nomor_akhir: numbers[numbers.length - 1],
+          coupons: numbers,
+        },
+      },
+    };
+  }
+
   // 5. COUPONS LOOKUP /api/coupons/lookup
   if (pathname === '/api/coupons/lookup') {
     const q = (searchParams.get('q') || body.query || body.q || '').trim().toUpperCase();
@@ -2393,8 +2766,8 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
             },
             outlet_asal: {
               id: cData.outlet_asal_id,
-              nama_outlet: outlet?.nama_outlet || cData.outlet_asal_id,
-              tipe: outlet?.tipe || 'retail',
+              nama_outlet: isWalkIn ? 'Kasir Retail Walk-In' : (outlet?.nama_outlet || cData.outlet_asal_id),
+              tipe: isWalkIn ? 'retail' : (outlet?.tipe || 'retail'),
             },
           },
         },
@@ -2412,21 +2785,103 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
 
   // 6. COUPONS LIST /api/coupons
   if (pathname === '/api/coupons') {
-    const q = (searchParams.get('q') || '').toUpperCase();
+    const q = (searchParams.get('q') || '').toLowerCase().trim();
+    const status = (searchParams.get('status') || 'all').toLowerCase().trim();
+    const periode = (searchParams.get('periode') || 'all').trim();
+    const tipe = (searchParams.get('tipe') || 'all').toLowerCase().trim();
     const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
-    const limit = Math.max(1, parseInt(searchParams.get('limit') || '50', 10));
+    const limit = Math.max(1, parseInt(searchParams.get('limit') || '25', 10));
 
-    const snap = await getDocs(query(collection(db, COLLECTIONS.COUPONS), firestoreLimit(150)));
+    const [coupSnap, idSnap, outSnap, batchSnap] = await Promise.all([
+      getDocs(collection(db, COLLECTIONS.COUPONS)),
+      getDocs(collection(db, COLLECTIONS.IDENTITIES)),
+      getDocs(collection(db, COLLECTIONS.OUTLETS)),
+      getDocs(collection(db, COLLECTIONS.COUPON_BATCHES)),
+    ]);
+
+    const idMap = new Map<string, any>();
+    idSnap.forEach(d => idMap.set(d.id, d.data()));
+
+    const outMap = new Map<string, any>();
+    outSnap.forEach(d => outMap.set(d.id, d.data()));
+
+    const batchMap = new Map<string, any>();
+    batchSnap.forEach(d => batchMap.set(d.id, d.data()));
+
     let coupons: any[] = [];
-    snap.forEach(d => coupons.push(d.data()));
+    coupSnap.forEach(d => {
+      const c = d.data();
+      const isWalkIn = c.tipe_penerima === 'walk_in';
+      const iden = c.identity_id ? idMap.get(c.identity_id) : null;
+      const out = c.outlet_asal_id ? outMap.get(c.outlet_asal_id) : null;
+      const bInfo = c.batch_id ? batchMap.get(String(c.batch_id)) : null;
 
+      const namaPemilik = isWalkIn
+        ? (c.nama_walk_in || 'Pelanggan Walk-In')
+        : (iden?.nama_pemilik || c.identity_id || '—');
+
+      coupons.push({
+        id: c.id || d.id,
+        nomor_kupon: c.nomor_kupon || d.id,
+        periode_kupon: c.periode_kupon || '2026-09',
+        nomor_urut: c.nomor_urut || 1,
+        status: c.status || 'aktif',
+        tanggal_serah: c.tanggal_serah || (c.created_at ? String(c.created_at).slice(0, 10) : '2026-09-01'),
+        petugas: c.petugas || '—',
+        kupon_whatsapp: c.whatsapp || null,
+        created_at: c.created_at || new Date().toISOString(),
+        batch_id: c.batch_id || null,
+        identity_id: c.identity_id || '—',
+        nama_pemilik: namaPemilik,
+        kota: iden?.kota || 'WATAMPONE',
+        member_whatsapp: iden?.whatsapp || null,
+        outlet_id: c.outlet_asal_id || '—',
+        nama_outlet: isWalkIn ? 'Kasir Retail Walk-In' : (out?.nama_outlet || c.outlet_asal_id || '—'),
+        outlet_tipe: isWalkIn ? 'retail' : (out?.tipe || 'retail'),
+        batch_keterangan: bInfo?.keterangan || null,
+        tipe_penerima: isWalkIn ? 'walk_in' : 'member',
+        nama_walk_in: c.nama_walk_in || null,
+        no_hp_walk_in: c.no_hp_walk_in || null,
+        no_invoice: c.no_invoice || null,
+      });
+    });
+
+    // Filters
+    if (status !== 'all') {
+      coupons = coupons.filter(c => c.status === status);
+    }
+    if (periode !== 'all') {
+      coupons = coupons.filter(c => c.periode_kupon === periode);
+    }
+    if (tipe !== 'all') {
+      coupons = coupons.filter(c => c.tipe_penerima === tipe);
+    }
     if (q) {
-      coupons = coupons.filter(c => (c.nomor_kupon && c.nomor_kupon.includes(q)) || (c.petugas && c.petugas.toUpperCase().includes(q)));
+      coupons = coupons.filter(c =>
+        c.nomor_kupon.toLowerCase().includes(q) ||
+        c.nama_pemilik.toLowerCase().includes(q) ||
+        (c.nama_walk_in && c.nama_walk_in.toLowerCase().includes(q)) ||
+        (c.no_invoice && c.no_invoice.toLowerCase().includes(q)) ||
+        (c.petugas && c.petugas.toLowerCase().includes(q))
+      );
     }
 
+    coupons.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '') || b.nomor_urut - a.nomor_urut);
+
     const total = coupons.length;
+    const totalPages = Math.ceil(total / limit) || 1;
     const start = (page - 1) * limit;
-    return { data: { coupons: coupons.slice(start, start + limit), total, page, limit } };
+    const paged = coupons.slice(start, start + limit);
+
+    return {
+      data: {
+        coupons: paged,
+        total,
+        page,
+        limit,
+        totalPages,
+      },
+    };
   }
 
   // 6b. STATEMENTS /api/statements/*
