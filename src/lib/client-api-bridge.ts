@@ -300,8 +300,31 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
         );
       }
 
-      // Urutkan berdasarkan ID One Identity agar nomor selalu berurutan (01, 02, 03, dst)
-      all.sort((a, b) => (a.id || '').localeCompare(b.id || '', undefined, { numeric: true }));
+      const sortBy = searchParams.get('sort_by') || 'id';
+      const order = (searchParams.get('order') || 'asc').toLowerCase();
+
+      // Urutkan berdasarkan kolom dan arah yang dipilih (asc / desc)
+      all.sort((a, b) => {
+        let comp = 0;
+        if (sortBy === 'id') {
+          comp = (a.id || '').localeCompare(b.id || '', undefined, { numeric: true });
+        } else if (sortBy === 'nama_pemilik') {
+          comp = (a.nama_pemilik || '').localeCompare(b.nama_pemilik || '');
+        } else if (sortBy === 'kota') {
+          comp = (a.kota || '').localeCompare(b.kota || '');
+        } else if (sortBy === 'jumlah_outlet') {
+          comp = (Number(a.jumlah_outlet) || 0) - (Number(b.jumlah_outlet) || 0);
+        } else if (sortBy === 'total_poin') {
+          comp = (Number(a.total_poin) || 0) - (Number(b.total_poin) || 0);
+        } else if (sortBy === 'total_kupon') {
+          comp = (Number(a.total_kupon) || 0) - (Number(b.total_kupon) || 0);
+        } else if (sortBy === 'status') {
+          comp = (a.status || '').localeCompare(b.status || '');
+        } else {
+          comp = (a.id || '').localeCompare(b.id || '', undefined, { numeric: true });
+        }
+        return order === 'desc' ? -comp : comp;
+      });
       const total = all.length;
       const start = (page - 1) * limit;
       const identities = all.slice(start, start + limit);

@@ -2,7 +2,7 @@
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Search, Users, ChevronRight, Award, Ticket, UserPlus, Download, X, AlertCircle, RefreshCw, CheckCircle2 } from "lucide-react";
+import { Search, Users, ChevronRight, Award, Ticket, UserPlus, Download, X, AlertCircle, RefreshCw, CheckCircle2, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
 import Pagination from "@/components/Pagination";
 
 interface Identity {
@@ -26,6 +26,10 @@ export default function IdentitiesPage() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
 
+  // Sorting State
+  const [sortField, setSortField] = useState<string>("id");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
+
   // Modal State
   const [showModal, setShowModal] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -46,19 +50,32 @@ export default function IdentitiesPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const params = new URLSearchParams({ q, page: String(page), limit: String(pageSize) });
+    const params = new URLSearchParams({
+      q,
+      page: String(page),
+      limit: String(pageSize),
+      sort_by: sortField,
+      order: sortOrder,
+    });
     const res = await fetch(`/api/identities?${params}`);
     const json = await res.json();
     const rawList: Identity[] = json.identities || [];
-    // Urutkan selalu berdasarkan ID One Identity (01, 02, 03, dst)
-    const sorted = [...rawList].sort((a, b) => (a.id || '').localeCompare(b.id || '', undefined, { numeric: true }));
-    setItems(sorted);
-    setTotal(json.total || sorted.length);
+    setItems(rawList);
+    setTotal(json.total || rawList.length);
     setLoading(false);
-  }, [q, page]);
+  }, [q, page, sortField, sortOrder]);
 
   useEffect(() => { load(); }, [load]);
-  useEffect(() => { setPage(1); }, [q]);
+  useEffect(() => { setPage(1); }, [q, sortField, sortOrder]);
+
+  const handleSort = (field: string) => {
+    if (sortField === field) {
+      setSortOrder(prev => prev === "asc" ? "desc" : "asc");
+    } else {
+      setSortField(field);
+      setSortOrder(field === "total_poin" || field === "total_kupon" || field === "jumlah_outlet" ? "desc" : "asc");
+    }
+  };
 
   // Generate clean next ID from server
   const generateNextId = async () => {
@@ -138,6 +155,47 @@ export default function IdentitiesPage() {
 
   const totalPages = Math.ceil(total / pageSize);
 
+  const renderSortHeader = (field: string, label: React.ReactNode, align: "left" | "center" | "right" = "left", minWidth?: number) => {
+    const isActive = sortField === field;
+    return (
+      <th
+        onClick={() => handleSort(field)}
+        style={{
+          whiteSpace: "nowrap",
+          cursor: "pointer",
+          userSelect: "none",
+          textAlign: align,
+          minWidth,
+          transition: "background 0.15s ease",
+        }}
+        className={align === "right" ? "col-num" : ""}
+        title={`Klik untuk mengurutkan berdasarkan ${typeof label === "string" ? label : field} (${isActive && sortOrder === "asc" ? "Z-A / Terbesar" : "A-Z / Terkecil"})`}
+      >
+        <div style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 6,
+          justifyContent: align === "center" ? "center" : align === "right" ? "flex-end" : "flex-start",
+          color: isActive ? "var(--primary-700, #1e3a8a)" : "inherit",
+          fontWeight: isActive ? 700 : 600,
+        }}>
+          {label}
+          <span style={{ display: "inline-flex", alignItems: "center" }}>
+            {isActive ? (
+              sortOrder === "asc" ? (
+                <ArrowUp size={13} style={{ color: "var(--primary-600, #2563eb)" }} />
+              ) : (
+                <ArrowDown size={13} style={{ color: "var(--primary-600, #2563eb)" }} />
+              )
+            ) : (
+              <ArrowUpDown size={12} style={{ opacity: 0.35 }} />
+            )}
+          </span>
+        </div>
+      </th>
+    );
+  };
+
   return (
     <div className="fade-in" style={{ padding: "28px 32px" }}>
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 24 }}>
@@ -194,13 +252,13 @@ export default function IdentitiesPage() {
               <table className="table">
                 <thead>
                   <tr>
-                    <th style={{ whiteSpace: "nowrap", minWidth: 150 }}>ID One Identity</th>
-                    <th>Nama Pemilik</th>
-                    <th>Kota</th>
-                    <th style={{ textAlign: "center" }}>Outlet</th>
-                    <th className="col-num"><Award size={12} style={{ display:"inline", marginRight:3 }}/>Poin</th>
-                    <th className="col-num"><Ticket size={12} style={{ display:"inline", marginRight:3 }}/>Kupon</th>
-                    <th>Status</th>
+                    {renderSortHeader("id", "ID One Identity", "left", 160)}
+                    {renderSortHeader("nama_pemilik", "Nama Pemilik", "left")}
+                    {renderSortHeader("kota", "Kota", "left")}
+                    {renderSortHeader("jumlah_outlet", "Outlet", "center")}
+                    {renderSortHeader("total_poin", <><Award size={12} style={{ display: "inline", marginRight: 3 }} />Poin</>, "right")}
+                    {renderSortHeader("total_kupon", <><Ticket size={12} style={{ display: "inline", marginRight: 3 }} />Kupon</>, "right")}
+                    {renderSortHeader("status", "Status", "left")}
                     <th></th>
                   </tr>
                 </thead>

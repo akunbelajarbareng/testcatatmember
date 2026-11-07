@@ -39,6 +39,16 @@ export async function GET(request: NextRequest) {
 
   const total = (db.prepare(`SELECT COUNT(*) as c FROM identities i ${where}`).get(...params) as { c: number }).c;
 
+  const sortBy = searchParams.get('sort_by') || 'id';
+  const order = (searchParams.get('order') || 'asc').toLowerCase() === 'desc' ? 'DESC' : 'ASC';
+  let orderByClause = `i.id ${order}`;
+  if (sortBy === 'nama_pemilik') orderByClause = `i.nama_pemilik ${order}`;
+  else if (sortBy === 'kota') orderByClause = `i.kota ${order}`;
+  else if (sortBy === 'jumlah_outlet') orderByClause = `jumlah_outlet ${order}`;
+  else if (sortBy === 'total_poin') orderByClause = `total_poin ${order}`;
+  else if (sortBy === 'total_kupon') orderByClause = `total_kupon ${order}`;
+  else if (sortBy === 'status') orderByClause = `i.status ${order}`;
+
   const identities = db.prepare(`
     SELECT
       i.id,
@@ -54,7 +64,7 @@ export async function GET(request: NextRequest) {
     LEFT JOIN invoices inv ON inv.outlet_id = o.id AND inv.is_excluded = 0
     ${where}
     GROUP BY i.id
-    ORDER BY i.id ASC
+    ORDER BY ${orderByClause}
     LIMIT ? OFFSET ?
   `).all(...params, limit, offset) as unknown[];
 
