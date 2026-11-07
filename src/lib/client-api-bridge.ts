@@ -3120,6 +3120,315 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
     return { data: { success: true, rows } };
   }
 
+  // 6c. WASTE PURCHASES /api/waste-purchases
+  if (pathname === '/api/waste-purchases' && method === 'GET') {
+    const month = searchParams.get('month') || ''; // YYYY-MM
+    const outletId = searchParams.get('outlet_id') || '';
+    const identityId = searchParams.get('identity_id') || '';
+    const q = (searchParams.get('q') || '').toLowerCase().trim();
+    const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
+    const limit = Math.max(1, Math.min(100, parseInt(searchParams.get('limit') || '25', 10)));
+
+    const [wasteSnap, outSnap, idSnap, rulesSnap] = await Promise.all([
+      getDocs(collection(db, COLLECTIONS.WASTE_PURCHASES)),
+      getDocs(collection(db, COLLECTIONS.OUTLETS)),
+      getDocs(collection(db, COLLECTIONS.IDENTITIES)),
+      getDocs(collection(db, COLLECTIONS.RULES_CONFIG)),
+    ]);
+
+    const outMap = new Map<string, any>();
+    outSnap.forEach(d => outMap.set(d.id, d.data()));
+
+    const idMap = new Map<string, any>();
+    idSnap.forEach(d => idMap.set(d.id, d.data()));
+
+    let hargaUco = 8000;
+    let rateWastePoin = 10000;
+    rulesSnap.forEach(d => {
+      const r = d.data();
+      if (r.kunci === 'harga_uco_per_kg' && r.nilai) hargaUco = Number(r.nilai);
+      if (r.kunci === 'rate_waste_poin' && r.nilai) rateWastePoin = Number(r.nilai);
+    });
+
+    let allItems: any[] = [];
+    wasteSnap.forEach(d => {
+      const w = d.data();
+      const out = w.outlet_id ? outMap.get(w.outlet_id) : null;
+      const iden = (w.identity_id || out?.identity_id) ? idMap.get(w.identity_id || out?.identity_id) : null;
+
+      allItems.push({
+        id: d.id,
+        outlet_id: w.outlet_id || '',
+        identity_id: w.identity_id || out?.identity_id || '',
+        tanggal: w.tanggal || (w.created_at ? String(w.created_at).slice(0, 10) : '2026-09-01'),
+        jenis_waste: w.jenis_waste || 'UCO',
+        berat_kg: Number(w.berat_kg) || 0,
+        harga_per_kg: Number(w.harga_per_kg) || hargaUco,
+        total_rupiah: Number(w.total_rupiah) || 0,
+        poin: Number(w.poin) || 0,
+        no_timbangan: w.no_timbangan || null,
+        catatan: w.catatan || null,
+        petugas: w.petugas || 'Admin',
+        nama_outlet: out?.nama_outlet || w.outlet_id || '—',
+        outlet_tipe: out?.tipe || 'retail',
+        nama_pemilik: iden?.nama_pemilik || w.identity_id || '—',
+        kota: iden?.kota || 'WATAMPONE',
+        created_at: w.created_at || new Date().toISOString(),
+      });
+    });
+
+    // Filters
+    if (month && /^\d{4}-\d{2}$/.test(month)) {
+      allItems = allItems.filter(w => w.tanggal && w.tanggal.startsWith(month));
+    }
+    if (outletId) {
+      allItems = allItems.filter(w => w.outlet_id === outletId);
+    }
+    if (identityId) {
+      allItems = allItems.filter(w => w.identity_id === identityId);
+    }
+    if (q) {
+      allItems = allItems.filter(w =>
+        w.nama_outlet.toLowerCase().includes(q) ||
+        w.outlet_id.toLowerCase().includes(q) ||
+        w.nama_pemilik.toLowerCase().includes(q) ||
+        w.identity_id.toLowerCase().includes(q) ||
+        (w.no_timbangan && w.no_timbangan.toLowerCase().includes(q)) ||
+        (w.catatan && w.catatan.toLowerCase().includes(q))
+      );
+    }
+
+    // Summary calculation on filtered items
+    let total_berat_kg = 0;
+    let total_rupiah = 0;
+    let total_poin = 0;
+    allItems.forEach(w => {
+      total_berat_kg += w.berat_kg;
+      total_rupiah += w.total_rupiah;
+      total_poin += w.poin;
+    });
+
+    allItems.sort((a, b) => b.tanggal.localeCompare(a.tanggal) || String(b.id).localeCompare(String(a.id)));
+
+    const total = allItems.length;
+    const totalPages = Math.ceil(total / limit) || 1;
+    const start = (page - 1) * limit;
+    const items = allItems.slice(start, start + limit);
+
+    return {
+      data: {
+        items,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages,
+        },
+        summary: {
+          total_trx: total,
+          total_berat_kg: Math.round(total_berat_kg * 100) / 100,
+          total_rupiah,
+          total_poin,
+        },
+        config: {
+          harga_uco_per_kg: hargaUco,
+          rate_waste_poin: rateWastePoin,
+        },
+      },
+    };
+  }
+
+  if (pathname === '/api/waste-purchases' && method === 'POST') {
+    const {
+      outlet_id,
+      tanggal,
+      jenis_waste = 'UCO',
+      berat_kg,
+      harga_per_kg,
+      total_rupiah,
+      no_timbangan,
+      catatan,
+    } = body;
+
+    if (!outlet_id) {
+      return { status: 400, data: { error: 'Outlet wajib dipilih' } };
+    }
+
+    const berat = Number(berat_kg);
+    if (isNaN(berat) || berat <= 0) {
+      return { status: 400, data: { error: 'Berat (Kg) harus berupa angka positif' } };
+    }
+
+    const outSnap = await getDoc(doc(db, COLLECTIONS.OUTLETS, outlet_id));
+    if (!outSnap.exists()) {
+      return { status: 404, data: { error: 'Outlet tidak ditemukan' } };
+    }
+    const outletData = outSnap.data();
+
+    let idenData: any = null;
+    if (outletData.identity_id) {
+      const idSnap = await getDoc(doc(db, COLLECTIONS.IDENTITIES, outletData.identity_id));
+      if (idSnap.exists()) idenData = idSnap.data();
+    }
+
+    const finalHarga = Number(harga_per_kg) > 0 ? Number(harga_per_kg) : 8000;
+    const finalTotalRp = Number(total_rupiah) > 0 ? Math.round(Number(total_rupiah)) : Math.round(berat * finalHarga);
+    const finalPoin = Math.floor(finalTotalRp / 10000); // Rp 10.000 = 1 Poin
+
+    const tgl = tanggal && /^\d{4}-\d{2}-\d{2}$/.test(tanggal)
+      ? tanggal
+      : new Date().toISOString().split('T')[0];
+
+    const nowIso = new Date().toISOString();
+    const wasteRef = doc(collection(db, COLLECTIONS.WASTE_PURCHASES));
+    const newDocId = wasteRef.id;
+
+    const newRecord = {
+      id: newDocId,
+      outlet_id,
+      identity_id: outletData.identity_id || '',
+      tanggal: tgl,
+      jenis_waste: jenis_waste || 'UCO',
+      berat_kg: berat,
+      harga_per_kg: finalHarga,
+      total_rupiah: finalTotalRp,
+      poin: finalPoin,
+      no_timbangan: no_timbangan ? String(no_timbangan).trim() : null,
+      catatan: catatan ? String(catatan).trim() : null,
+      petugas: getActiveUser()?.nama || getActiveUser()?.username || 'Admin',
+      created_at: nowIso,
+      updated_at: nowIso,
+    };
+
+    await setDoc(wasteRef, newRecord);
+
+    try {
+      const auditRef = doc(collection(db, COLLECTIONS.AUDIT_LOG));
+      await setDoc(auditRef, {
+        id: auditRef.id,
+        tipe: 'create_waste_purchase',
+        entity_id: newDocId,
+        user_id: getActiveUser()?.username || 'admin',
+        keterangan: `Pembelian ${berat} kg ${jenis_waste} (Rp ${finalTotalRp.toLocaleString('id-ID')}, ${finalPoin} Poin) dari outlet ${outletData.nama_outlet || outlet_id} (${outlet_id})`,
+        created_at: nowIso,
+      });
+    } catch {}
+
+    const fullItem = {
+      ...newRecord,
+      nama_outlet: outletData.nama_outlet || outlet_id,
+      outlet_tipe: outletData.tipe || 'retail',
+      nama_pemilik: idenData?.nama_pemilik || outletData.identity_id || '—',
+      kota: idenData?.kota || 'WATAMPONE',
+    };
+
+    return { status: 201, data: { success: true, item: fullItem } };
+  }
+
+  if (pathname.startsWith('/api/waste-purchases/') && method === 'PUT') {
+    const rawId = pathname.replace('/api/waste-purchases/', '');
+    const wasteId = decodeURIComponent(rawId);
+
+    const wasteRef = doc(db, COLLECTIONS.WASTE_PURCHASES, wasteId);
+    const existingSnap = await getDoc(wasteRef);
+    if (!existingSnap.exists()) {
+      return { status: 404, data: { error: 'Transaksi tidak ditemukan' } };
+    }
+    const existing = existingSnap.data();
+
+    const {
+      tanggal,
+      jenis_waste = 'UCO',
+      berat_kg,
+      harga_per_kg,
+      total_rupiah,
+      no_timbangan,
+      catatan,
+    } = body;
+
+    const berat = Number(berat_kg);
+    if (isNaN(berat) || berat <= 0) {
+      return { status: 400, data: { error: 'Berat (Kg) harus berupa angka positif' } };
+    }
+
+    const harga = Number(harga_per_kg) > 0 ? Number(harga_per_kg) : (existing.harga_per_kg || 8000);
+    const finalTotalRp = Number(total_rupiah) > 0 ? Math.round(Number(total_rupiah)) : Math.round(berat * harga);
+    const finalPoin = Math.floor(finalTotalRp / 10000);
+    const tgl = tanggal && /^\d{4}-\d{2}-\d{2}$/.test(tanggal) ? tanggal : existing.tanggal;
+    const nowIso = new Date().toISOString();
+
+    const updatedData = {
+      tanggal: tgl,
+      jenis_waste,
+      berat_kg: berat,
+      harga_per_kg: harga,
+      total_rupiah: finalTotalRp,
+      poin: finalPoin,
+      no_timbangan: no_timbangan ? String(no_timbangan).trim() : null,
+      catatan: catatan ? String(catatan).trim() : null,
+      updated_at: nowIso,
+    };
+
+    await updateDoc(wasteRef, updatedData);
+
+    try {
+      const auditRef = doc(collection(db, COLLECTIONS.AUDIT_LOG));
+      await setDoc(auditRef, {
+        id: auditRef.id,
+        tipe: 'update_waste_purchase',
+        entity_id: wasteId,
+        user_id: getActiveUser()?.username || 'admin',
+        keterangan: `Update pembelian waste #${wasteId} (${berat} kg, Rp ${finalTotalRp.toLocaleString('id-ID')})`,
+        created_at: nowIso,
+      });
+    } catch {}
+
+    const outSnap = existing.outlet_id ? await getDoc(doc(db, COLLECTIONS.OUTLETS, existing.outlet_id)) : null;
+    const outData = outSnap?.exists() ? outSnap.data() : null;
+    const idSnap = (existing.identity_id || outData?.identity_id) ? await getDoc(doc(db, COLLECTIONS.IDENTITIES, existing.identity_id || outData?.identity_id)) : null;
+    const idData = idSnap?.exists() ? idSnap.data() : null;
+
+    const fullUpdated = {
+      ...existing,
+      ...updatedData,
+      id: wasteId,
+      nama_outlet: outData?.nama_outlet || existing.outlet_id,
+      outlet_tipe: outData?.tipe || 'retail',
+      nama_pemilik: idData?.nama_pemilik || existing.identity_id || '—',
+      kota: idData?.kota || 'WATAMPONE',
+    };
+
+    return { data: { success: true, item: fullUpdated } };
+  }
+
+  if (pathname.startsWith('/api/waste-purchases/') && method === 'DELETE') {
+    const rawId = pathname.replace('/api/waste-purchases/', '');
+    const wasteId = decodeURIComponent(rawId);
+
+    const wasteRef = doc(db, COLLECTIONS.WASTE_PURCHASES, wasteId);
+    const existingSnap = await getDoc(wasteRef);
+    if (!existingSnap.exists()) {
+      return { status: 404, data: { error: 'Transaksi tidak ditemukan' } };
+    }
+    const existing = existingSnap.data();
+
+    await deleteDoc(wasteRef);
+
+    try {
+      const auditRef = doc(collection(db, COLLECTIONS.AUDIT_LOG));
+      await setDoc(auditRef, {
+        id: auditRef.id,
+        tipe: 'delete_waste_purchase',
+        entity_id: wasteId,
+        user_id: getActiveUser()?.username || 'admin',
+        keterangan: `Hapus transaksi pembelian waste #${wasteId} (${existing.berat_kg} kg, Rp ${(Number(existing.total_rupiah) || 0).toLocaleString('id-ID')})`,
+        created_at: new Date().toISOString(),
+      });
+    } catch {}
+
+    return { data: { success: true, message: 'Transaksi berhasil dihapus' } };
+  }
+
   // 6b. STATEMENTS /api/statements/*
   if (pathname.startsWith('/api/statements/') && pathname.endsWith('/finalize') && method === 'POST') {
     const rawPath = pathname.replace('/api/statements/', '').replace('/finalize', '');
