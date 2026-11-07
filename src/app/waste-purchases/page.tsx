@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
+import * as XLSX from "xlsx";
 import {
   Droplets,
   Search,
@@ -18,6 +19,7 @@ import {
   DollarSign,
   Award,
   FileText,
+  Download,
   X,
   Save,
 } from "lucide-react";
@@ -248,6 +250,58 @@ export default function WastePurchasesPage() {
     ? Math.floor(Number(formTotalRupiah) / (config.rate_waste_poin || 10000))
     : 0;
 
+  const [exporting, setExporting] = useState(false);
+  const handleExportExcel = async () => {
+    setExporting(true);
+    try {
+      const params = new URLSearchParams();
+      if (month) params.set("month", month);
+      if (q) params.set("q", q);
+
+      const res = await fetch(`/api/waste-purchases/export?${params.toString()}`);
+      const json = await res.json();
+      const rows = json.rows || [];
+      if (rows.length === 0) {
+        alert("Tidak ada data transaksi waste untuk diekspor pada filter yang dipilih.");
+        return;
+      }
+
+      const worksheet = XLSX.utils.json_to_sheet(rows);
+      worksheet["!cols"] = [
+        { wch: 6 },  // No
+        { wch: 14 }, // ID Transaksi
+        { wch: 14 }, // Tanggal
+        { wch: 12 }, // Periode
+        { wch: 16 }, // No. Timbangan
+        { wch: 14 }, // Jenis Limbah
+        { wch: 14 }, // Berat (Kg)
+        { wch: 16 }, // Harga / Kg (Rp)
+        { wch: 18 }, // Total Nilai (Rp)
+        { wch: 18 }, // Poin Reward (+Pt)
+        { wch: 18 }, // ID Member
+        { wch: 26 }, // Nama Pemilik
+        { wch: 18 }, // ID Outlet
+        { wch: 26 }, // Nama Outlet
+        { wch: 14 }, // Lini Bisnis
+        { wch: 16 }, // Kota
+        { wch: 16 }, // Petugas
+        { wch: 26 }, // Catatan
+        { wch: 22 }, // Waktu Input
+      ];
+
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Waste Purchasing");
+      const dateStr = new Date().toISOString().slice(0, 10);
+      const suffix = month ? `_${month}` : `_${dateStr}`;
+      XLSX.writeFile(workbook, `Oriental_CRM_Waste_Purchasing${suffix}.xlsx`);
+    } catch (err) {
+      console.error("Export error:", err);
+      alert("Gagal mengekspor data waste purchasing");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <div className="fade-in" style={{ padding: "28px 32px", maxWidth: 1200 }}>
       {/* Top Header */}
@@ -275,13 +329,24 @@ export default function WastePurchasesPage() {
           </p>
         </div>
 
-        <button
-          onClick={openCreateModal}
-          className="btn btn-primary"
-          style={{ display: "flex", alignItems: "center", gap: 8 }}
-        >
-          <Plus size={16} /> Catat Pembelian Baru
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <button
+            onClick={handleExportExcel}
+            disabled={exporting}
+            className="btn btn-secondary"
+            style={{ display: "flex", alignItems: "center", gap: 8, background: "#fff" }}
+          >
+            {exporting ? <RefreshCw size={16} className="animate-spin" /> : <Download size={16} />}
+            {exporting ? "Mengekspor..." : "Export Excel (.xlsx)"}
+          </button>
+          <button
+            onClick={openCreateModal}
+            className="btn btn-primary"
+            style={{ display: "flex", alignItems: "center", gap: 8 }}
+          >
+            <Plus size={16} /> Catat Pembelian Baru
+          </button>
+        </div>
       </div>
 
       {notification && (

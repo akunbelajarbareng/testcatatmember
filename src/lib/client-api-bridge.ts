@@ -3195,7 +3195,99 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
     return { data: { success: true, rows } };
   }
 
-  // 6c. WASTE PURCHASES /api/waste-purchases
+  // 6c. WASTE PURCHASES EXPORT /api/waste-purchases/export
+  if (pathname === '/api/waste-purchases/export') {
+    const month = searchParams.get('month') || ''; // YYYY-MM
+    const outletId = searchParams.get('outlet_id') || '';
+    const identityId = searchParams.get('identity_id') || '';
+    const q = (searchParams.get('q') || '').toLowerCase().trim();
+
+    const [wasteSnap, outSnap, idSnap] = await Promise.all([
+      getDocs(collection(db, COLLECTIONS.WASTE_PURCHASES)),
+      getDocs(collection(db, COLLECTIONS.OUTLETS)),
+      getDocs(collection(db, COLLECTIONS.IDENTITIES)),
+    ]);
+
+    const outMap = new Map<string, any>();
+    outSnap.forEach(d => outMap.set(d.id, d.data()));
+
+    const idMap = new Map<string, any>();
+    idSnap.forEach(d => idMap.set(d.id, d.data()));
+
+    const rawItems: any[] = [];
+    wasteSnap.forEach(d => {
+      const item = d.data();
+      const o = item.outlet_id ? outMap.get(item.outlet_id) : null;
+      const iden = item.identity_id ? idMap.get(item.identity_id) : (o?.identity_id ? idMap.get(o.identity_id) : null);
+
+      const nama_outlet = o?.nama_outlet || item.nama_outlet || item.outlet_id || '';
+      const nama_pemilik = iden?.nama_pemilik || item.nama_pemilik || '';
+      const kota = iden?.kota || o?.kota || 'WATAMPONE';
+      const outlet_tipe = o?.tipe || item.outlet_tipe || 'retail';
+
+      // Filters
+      if (month && !String(item.tanggal || '').startsWith(month)) {
+        return;
+      }
+      if (outletId && item.outlet_id !== outletId) {
+        return;
+      }
+      if (identityId && item.identity_id !== identityId) {
+        return;
+      }
+      if (q) {
+        const matchQ =
+          nama_outlet.toLowerCase().includes(q) ||
+          nama_pemilik.toLowerCase().includes(q) ||
+          String(item.no_timbangan || '').toLowerCase().includes(q) ||
+          String(item.catatan || '').toLowerCase().includes(q) ||
+          String(item.petugas || '').toLowerCase().includes(q);
+        if (!matchQ) return;
+      }
+
+      rawItems.push({
+        ...item,
+        nama_outlet,
+        nama_pemilik,
+        kota,
+        outlet_tipe,
+      });
+    });
+
+    rawItems.sort((a, b) => String(b.tanggal || '').localeCompare(String(a.tanggal || '')) || Number(b.id) - Number(a.id));
+
+    const rows = rawItems.map((item, idx) => ({
+      No: idx + 1,
+      'ID Transaksi': item.id,
+      Tanggal: item.tanggal || '',
+      Periode: item.tanggal ? String(item.tanggal).slice(0, 7) : '',
+      'No. Timbangan': item.no_timbangan || '-',
+      'Jenis Limbah': item.jenis_waste || 'UCO',
+      'Berat (Kg)': Number(item.berat_kg) || 0,
+      'Harga / Kg (Rp)': Number(item.harga_per_kg) || 0,
+      'Total Nilai (Rp)': Number(item.total_rupiah) || 0,
+      'Poin Reward (+Pt)': Number(item.poin) || 0,
+      'ID Member': item.identity_id || '',
+      'Nama Pemilik': item.nama_pemilik || '-',
+      'ID Outlet': item.outlet_id || '',
+      'Nama Outlet': item.nama_outlet || '-',
+      'Lini Bisnis': (item.outlet_tipe || 'retail').toUpperCase(),
+      Kota: item.kota || 'WATAMPONE',
+      Petugas: item.petugas || 'Admin',
+      Catatan: item.catatan || '-',
+      'Waktu Input': item.created_at || '',
+    }));
+
+    return {
+      data: {
+        success: true,
+        total: rows.length,
+        rows,
+      },
+    };
+  }
+
+  // 6d. WASTE PURCHASES /api/waste-purchases
   if (pathname === '/api/waste-purchases' && method === 'GET') {
     const month = searchParams.get('month') || ''; // YYYY-MM
     const outletId = searchParams.get('outlet_id') || '';
