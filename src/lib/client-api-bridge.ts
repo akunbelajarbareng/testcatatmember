@@ -714,6 +714,256 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
     }
   }
 
+  // 2b. MAINTENANCE AUDIT INACTIVITY /api/maintenance/audit-inactivity
+  if (pathname === '/api/maintenance/audit-inactivity') {
+    if (method === 'GET') {
+      const [rulesSnap, outSnap, invSnap, wasteSnap, auditSnap] = await Promise.all([
+        getDocs(collection(db, COLLECTIONS.RULES_CONFIG)),
+        getDocs(collection(db, COLLECTIONS.OUTLETS)),
+        getDocs(collection(db, COLLECTIONS.INVOICES)),
+        getDocs(collection(db, COLLECTIONS.WASTE_PURCHASES)),
+        getDocs(query(collection(db, COLLECTIONS.AUDIT_LOG), where('aksi', '==', 'auto_deactivate'))),
+      ]);
+
+      let thresholdMonths = 3;
+      rulesSnap.forEach(d => {
+        if (d.id === 'periode_tidak_aktif_bulan') {
+          const val = Number(d.data().nilai);
+          if (val > 0) thresholdMonths = val;
+        }
+      });
+
+      const asOfDateParam = searchParams.get('asOfDate');
+      const now = asOfDateParam ? new Date(asOfDateParam) : new Date();
+      const asOfDateStr = now.toISOString().slice(0, 10);
+
+      const cutoffTarget = new Date(now.getFullYear(), now.getMonth() - thresholdMonths, now.getDate());
+      const cutoffDate = cutoffTarget.toISOString().slice(0, 10);
+
+      // Map latest invoice per outlet
+      const lastInvMap = new Map<string, string>();
+      invSnap.forEach(d => {
+        const inv = d.data();
+        if (inv.outlet_id && inv.tanggal) {
+          const cur = lastInvMap.get(inv.outlet_id);
+          if (!cur || inv.tanggal > cur) lastInvMap.set(inv.outlet_id, inv.tanggal);
+        }
+      });
+
+      // Map latest waste per outlet
+      const lastWasteMap = new Map<string, string>();
+      wasteSnap.forEach(d => {
+        const w = d.data();
+        if (w.outlet_id && w.tanggal) {
+          const cur = lastWasteMap.get(w.outlet_id);
+          if (!cur || w.tanggal > cur) lastWasteMap.set(w.outlet_id, w.tanggal);
+        }
+      });
+
+      const dormantCandidates: { id: string; nama: string; lastActivity: string; identity_id?: string }[] = [];
+      let activeOutletsCount = 0;
+
+      outSnap.forEach(d => {
+        const o = d.data();
+        if (o.aktif === 1 || o.aktif === true) {
+          activeOutletsCount++;
+          const lastInv = lastInvMap.get(d.id);
+          const lastWaste = lastWasteMap.get(d.id);
+          let lastActivity: string;
+          if (lastInv || lastWaste) {
+            lastActivity = (lastInv && lastWaste)
+              ? (lastInv > lastWaste ? lastInv : lastWaste)
+              : (lastInv || lastWaste)!;
+          } else {
+            lastActivity = o.tgl_registrasi || '2026-09-01';
+          }
+
+          if (lastActivity < cutoffDate) {
+            dormantCandidates.push({
+              id: d.id,
+              nama: o.nama_outlet || d.id,
+              lastActivity,
+              identity_id: o.identity_id,
+            });
+          }
+        }
+      });
+
+      let lastAudit: any = null;
+      if (!auditSnap.empty) {
+        const audits: any[] = [];
+        auditSnap.forEach(d => audits.push(d.data()));
+        audits.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+        lastAudit = audits[0];
+      }
+
+      return {
+        data: {
+          thresholdMonths,
+          cutoffDate,
+          asOfDate: asOfDateStr,
+          activeOutletsCount,
+          dormantCount: dormantCandidates.length,
+          dormantCandidates,
+          lastAudit,
+        },
+      };
+    } else if (method === 'POST') {
+      const { asOfDate: asOfDateParam } = body || {};
+
+      const [rulesSnap, outSnap, idSnap, invSnap, wasteSnap] = await Promise.all([
+        getDocs(collection(db, COLLECTIONS.RULES_CONFIG)),
+        getDocs(collection(db, COLLECTIONS.OUTLETS)),
+        getDocs(collection(db, COLLECTIONS.IDENTITIES)),
+        getDocs(collection(db, COLLECTIONS.INVOICES)),
+        getDocs(collection(db, COLLECTIONS.WASTE_PURCHASES)),
+      ]);
+
+      let thresholdMonths = 3;
+      rulesSnap.forEach(d => {
+        if (d.id === 'periode_tidak_aktif_bulan') {
+          const val = Number(d.data().nilai);
+          if (val > 0) thresholdMonths = val;
+        }
+      });
+
+      const now = asOfDateParam ? new Date(asOfDateParam) : new Date();
+      const asOfDateStr = now.toISOString().slice(0, 10);
+      const cutoffTarget = new Date(now.getFullYear(), now.getMonth() - thresholdMonths, now.getDate());
+      const cutoffDate = cutoffTarget.toISOString().slice(0, 10);
+
+      const lastInvMap = new Map<string, string>();
+      invSnap.forEach(d => {
+        const inv = d.data();
+        if (inv.outlet_id && inv.tanggal) {
+          const cur = lastInvMap.get(inv.outlet_id);
+          if (!cur || inv.tanggal > cur) lastInvMap.set(inv.outlet_id, inv.tanggal);
+        }
+      });
+
+      const lastWasteMap = new Map<string, string>();
+      wasteSnap.forEach(d => {
+        const w = d.data();
+        if (w.outlet_id && w.tanggal) {
+          const cur = lastWasteMap.get(w.outlet_id);
+          if (!cur || w.tanggal > cur) lastWasteMap.set(w.outlet_id, w.tanggal);
+        }
+      });
+
+      const deactivatedOutlets: { id: string; nama: string; lastActivity: string; identity_id?: string }[] = [];
+      const remainingActiveOutletsPerIdentity = new Map<string, number>();
+
+      // First count all active outlets per identity
+      outSnap.forEach(d => {
+        const o = d.data();
+        if ((o.aktif === 1 || o.aktif === true) && o.identity_id) {
+          const cur = remainingActiveOutletsPerIdentity.get(o.identity_id) || 0;
+          remainingActiveOutletsPerIdentity.set(o.identity_id, cur + 1);
+        }
+      });
+
+      const updatePromises: Promise<any>[] = [];
+
+      outSnap.forEach(d => {
+        const o = d.data();
+        if (o.aktif === 1 || o.aktif === true) {
+          const lastInv = lastInvMap.get(d.id);
+          const lastWaste = lastWasteMap.get(d.id);
+          let lastActivity: string;
+          if (lastInv || lastWaste) {
+            lastActivity = (lastInv && lastWaste)
+              ? (lastInv > lastWaste ? lastInv : lastWaste)
+              : (lastInv || lastWaste)!;
+          } else {
+            lastActivity = o.tgl_registrasi || '2026-09-01';
+          }
+
+          if (lastActivity < cutoffDate) {
+            deactivatedOutlets.push({
+              id: d.id,
+              nama: o.nama_outlet || d.id,
+              lastActivity,
+              identity_id: o.identity_id,
+            });
+
+            // Decrement active outlet count for its identity
+            if (o.identity_id) {
+              const cur = remainingActiveOutletsPerIdentity.get(o.identity_id) || 1;
+              remainingActiveOutletsPerIdentity.set(o.identity_id, Math.max(0, cur - 1));
+            }
+
+            // Update outlet to nonaktif
+            updatePromises.push(
+              updateDoc(doc(db, COLLECTIONS.OUTLETS, d.id), {
+                aktif: 0,
+                nonaktif_tipe: 'otomatis',
+                nonaktif_alasan: `Tidak ada transaksi selama >= ${thresholdMonths} bulan (Aktivitas terakhir: ${lastActivity})`,
+                nonaktif_tanggal: new Date().toISOString(),
+                nonaktif_oleh: 'Sistem Otomatis',
+                updated_at: new Date().toISOString(),
+              })
+            );
+          }
+        }
+      });
+
+      const deactivatedIdentities: { id: string; nama: string }[] = [];
+
+      idSnap.forEach(d => {
+        const ident = d.data();
+        if (ident.status === 'aktif' && !d.id.startsWith('999-')) {
+          const activeOutletsRemaining = remainingActiveOutletsPerIdentity.get(d.id) ?? 0;
+          if (activeOutletsRemaining === 0) {
+            deactivatedIdentities.push({
+              id: d.id,
+              nama: ident.nama_pemilik || d.id,
+            });
+
+            updatePromises.push(
+              updateDoc(doc(db, COLLECTIONS.IDENTITIES, d.id), {
+                status: 'nonaktif',
+                nonaktif_tipe: 'otomatis',
+                nonaktif_alasan: `Seluruh lini bisnis nonaktif (Audit otomatis >= ${thresholdMonths} bulan)`,
+                nonaktif_tanggal: new Date().toISOString(),
+                nonaktif_oleh: 'Sistem Otomatis',
+                updated_at: new Date().toISOString(),
+              })
+            );
+          }
+        }
+      });
+
+      await Promise.all(updatePromises);
+
+      // Log to audit log
+      try {
+        const auditRef = doc(collection(db, COLLECTIONS.AUDIT_LOG));
+        await setDoc(auditRef, {
+          id: auditRef.id,
+          tipe: 'audit_inactivity',
+          aksi: 'auto_deactivate',
+          user_id: getActiveUser()?.username || 'admin',
+          keterangan: `Audit inaktivitas selesai: ${deactivatedOutlets.length} outlet dan ${deactivatedIdentities.length} akun utama dinonaktifkan otomatis (cutoff: ${cutoffDate}).`,
+          created_at: new Date().toISOString(),
+        });
+      } catch {}
+
+      return {
+        data: {
+          success: true,
+          message: `Audit inaktivitas selesai: ${deactivatedOutlets.length} outlet dan ${deactivatedIdentities.length} akun utama dinonaktifkan otomatis.`,
+          result: {
+            thresholdMonths,
+            cutoffDate,
+            asOfDate: asOfDateStr,
+            deactivatedOutlets,
+            deactivatedIdentities,
+          },
+        },
+      };
+    }
+  }
+
   // 3. IDENTITIES /api/identities
   if (pathname === '/api/identities') {
     if (method === 'GET') {
