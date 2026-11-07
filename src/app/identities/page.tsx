@@ -3,6 +3,7 @@ import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Search, Users, ChevronRight, Award, Ticket, UserPlus, Download, X, AlertCircle, RefreshCw, CheckCircle2, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
+import * as XLSX from "xlsx";
 import Pagination from "@/components/Pagination";
 
 interface Identity {
@@ -33,6 +34,7 @@ export default function IdentitiesPage() {
   // Modal State
   const [showModal, setShowModal] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [genLoading, setGenLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
 
@@ -153,6 +155,55 @@ export default function IdentitiesPage() {
     }
   };
 
+  const handleExportExcel = async () => {
+    setExporting(true);
+    try {
+      const res = await fetch(`/api/identities/export${q ? `?q=${encodeURIComponent(q)}` : ""}`);
+      const json = await res.json();
+      const rows = json.rows || [];
+
+      if (rows.length === 0) {
+        alert("Tidak ada data member untuk diekspor");
+        return;
+      }
+
+      const worksheet = XLSX.utils.json_to_sheet(rows);
+      worksheet["!cols"] = [
+        { wch: 6 },  // No
+        { wch: 18 }, // ID Akun Utama
+        { wch: 28 }, // Nama Member
+        { wch: 14 }, // Status Member
+        { wch: 30 }, // Alamat
+        { wch: 16 }, // Kecamatan
+        { wch: 16 }, // Kota
+        { wch: 18 }, // Provinsi
+        { wch: 10 }, // Kode Pos
+        { wch: 22 }, // ID Outlet
+        { wch: 28 }, // Nama Outlet
+        { wch: 14 }, // Lini Bisnis
+        { wch: 18 }, // Skema Rate Poin
+        { wch: 16 }, // ID POS Lama
+        { wch: 14 }, // Status Outlet
+        { wch: 35 }, // Alias Kasir POS
+        { wch: 20 }, // Total Transaksi
+        { wch: 12 }, // Total Poin
+        { wch: 12 }, // Total Kupon
+      ];
+
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Daftar Member");
+
+      const now = new Date();
+      const dateStr = now.toISOString().slice(0, 10);
+      XLSX.writeFile(workbook, `Oriental_CRM_Daftar_Member_${dateStr}.xlsx`);
+    } catch (err) {
+      console.error("Export error:", err);
+      alert("Gagal mengekspor data Excel");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const totalPages = Math.ceil(total / pageSize);
 
   const renderSortHeader = (field: string, label: React.ReactNode, align: "left" | "center" | "right" = "left", minWidth?: number) => {
@@ -204,15 +255,21 @@ export default function IdentitiesPage() {
           <p className="page-subtitle">{fmt(total)} One Identity terdaftar</p>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <a
-            href={`/api/identities/export${q ? `?q=${encodeURIComponent(q)}` : ""}`}
+          <button
+            type="button"
+            onClick={handleExportExcel}
+            disabled={exporting}
             className="btn btn-outline"
-            style={{ display: "flex", alignItems: "center", gap: 8, textDecoration: "none" }}
+            style={{ display: "flex", alignItems: "center", gap: 8 }}
             title="Download seluruh data Member, Outlet, dan Aliases dalam format Excel (.xlsx)"
-            download
           >
-            <Download size={15} /> Export Excel Lengkap
-          </a>
+            {exporting ? (
+              <RefreshCw size={15} style={{ animation: "spin 0.8s linear infinite" }} />
+            ) : (
+              <Download size={15} />
+            )}
+            {exporting ? "Mengekspor..." : "Export Excel Lengkap"}
+          </button>
           <button onClick={openAddModal} className="btn btn-primary" style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <UserPlus size={16} /> Tambah Akun Utama Baru
           </button>

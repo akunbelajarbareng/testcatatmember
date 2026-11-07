@@ -760,6 +760,136 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
     }
   }
 
+  // 3b. EXPORT IDENTITIES /api/identities/export
+  if (pathname === '/api/identities/export') {
+    const q = (searchParams.get('q') || '').toLowerCase();
+    const [idSnap, outSnap, aliasSnap, invSnap] = await Promise.all([
+      getDocs(collection(db, COLLECTIONS.IDENTITIES)),
+      getDocs(collection(db, COLLECTIONS.OUTLETS)),
+      getDocs(collection(db, COLLECTIONS.POS_ALIASES)),
+      getDocs(collection(db, COLLECTIONS.INVOICES)),
+    ]);
+
+    const identities: any[] = [];
+    idSnap.forEach(d => identities.push(d.data()));
+
+    const outlets: any[] = [];
+    outSnap.forEach(d => outlets.push(d.data()));
+
+    const aliases: any[] = [];
+    aliasSnap.forEach(d => aliases.push(d.data()));
+
+    const invoices: any[] = [];
+    invSnap.forEach(d => invoices.push(d.data()));
+
+    // Map aliases per outlet
+    const aliasMap = new Map<string, string[]>();
+    aliases.forEach(a => {
+      if (a.outlet_id && a.nama_pos) {
+        const arr = aliasMap.get(a.outlet_id) || [];
+        arr.push(a.nama_pos);
+        aliasMap.set(a.outlet_id, arr);
+      }
+    });
+
+    // Map invoice stats per outlet
+    const invMap = new Map<string, { trx: number; poin: number; kupon: number }>();
+    invoices.forEach(inv => {
+      if (inv.outlet_id && !inv.is_excluded) {
+        const cur = invMap.get(inv.outlet_id) || { trx: 0, poin: 0, kupon: 0 };
+        cur.trx += Number(inv.jumlah) || 0;
+        cur.poin += Number(inv.poin) || 0;
+        cur.kupon += Number(inv.kupon) || 0;
+        invMap.set(inv.outlet_id, cur);
+      }
+    });
+
+    let filteredIdentities = identities;
+    if (q) {
+      filteredIdentities = identities.filter(i =>
+        (i.id && i.id.toLowerCase().includes(q)) ||
+        (i.nama_pemilik && i.nama_pemilik.toLowerCase().includes(q)) ||
+        (i.kota && i.kota.toLowerCase().includes(q))
+      );
+    }
+    filteredIdentities.sort((a, b) => (a.id || '').localeCompare(b.id || '', undefined, { numeric: true }));
+
+    const excelRows: any[] = [];
+    let no = 1;
+
+    for (const iden of filteredIdentities) {
+      const memberOutlets = outlets.filter(o => o.identity_id === iden.id);
+      if (memberOutlets.length === 0) {
+        excelRows.push({
+          'No': no++,
+          'ID Akun Utama (One Identity)': iden.id,
+          'Nama Member (Pemilik)': iden.nama_pemilik,
+          'Status Member': (iden.status || 'aktif').toUpperCase(),
+          'Alamat': iden.alamat || '-',
+          'Kecamatan': iden.kecamatan || '-',
+          'Kota': iden.kota || '-',
+          'Provinsi': iden.provinsi || '-',
+          'Kode Pos': iden.kode_pos || '-',
+          'ID Outlet (POS Baru)': '(Belum Ada Outlet)',
+          'Nama Outlet': '-',
+          'Lini Bisnis': '-',
+          'Skema Rate Poin': '-',
+          'ID POS Lama (Kode 131)': '-',
+          'Status Outlet': '-',
+          'Alias Kasir POS Terhubung': '(Belum Ada Alias)',
+          'Total Transaksi (Rp)': 0,
+          'Total Poin': 0,
+          'Total Kupon': 0,
+        });
+      } else {
+        for (const out of memberOutlets) {
+          let ratePoin = '-';
+          const tipe = (out.tipe || '').toLowerCase();
+          if (tipe === 'retail') ratePoin = 'Rp 100.000 / pt';
+          else if (tipe === 'ukm') ratePoin = 'Rp 50.000 / pt';
+          else if (tipe === 'grosir') ratePoin = 'Rp 200.000 / pt';
+
+          const outAliases = aliasMap.get(out.id) || [];
+          const outStats = invMap.get(out.id) || {
+            trx: out.total_transaksi || 0,
+            poin: out.total_poin || 0,
+            kupon: out.total_kupon || 0,
+          };
+
+          excelRows.push({
+            'No': no++,
+            'ID Akun Utama (One Identity)': iden.id,
+            'Nama Member (Pemilik)': iden.nama_pemilik,
+            'Status Member': (iden.status || 'aktif').toUpperCase(),
+            'Alamat': iden.alamat || '-',
+            'Kecamatan': iden.kecamatan || '-',
+            'Kota': iden.kota || '-',
+            'Provinsi': iden.provinsi || '-',
+            'Kode Pos': iden.kode_pos || '-',
+            'ID Outlet (POS Baru)': out.id,
+            'Nama Outlet': out.nama_outlet || '-',
+            'Lini Bisnis': out.tipe ? out.tipe.toUpperCase() : '-',
+            'Skema Rate Poin': ratePoin,
+            'ID POS Lama (Kode 131)': out.id_pos_lama || '-',
+            'Status Outlet': out.aktif === 1 ? 'AKTIF' : 'NONAKTIF',
+            'Alias Kasir POS Terhubung': outAliases.length > 0 ? outAliases.join(', ') : '(Belum Ada Alias)',
+            'Total Transaksi (Rp)': outStats.trx,
+            'Total Poin': outStats.poin,
+            'Total Kupon': outStats.kupon,
+          });
+        }
+      }
+    }
+
+    return {
+      data: {
+        success: true,
+        count: excelRows.length,
+        rows: excelRows,
+      },
+    };
+  }
+
   // 4. IDENTITIES NEXT ID /api/identities/next-id
   if (pathname === '/api/identities/next-id') {
     const now = new Date();
