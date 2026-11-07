@@ -2201,6 +2201,139 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
     };
   }
 
+  // 5a. COUPONS QUOTA /api/coupons/quota/:identityId
+  if (pathname.startsWith('/api/coupons/quota/')) {
+    const rawId = pathname.replace('/api/coupons/quota/', '');
+    const identityId = decodeURIComponent(rawId).trim();
+    if (!identityId) {
+      return { status: 400, data: { error: 'Identity ID wajib disertakan' } };
+    }
+
+    const idSnap = await getDoc(doc(db, COLLECTIONS.IDENTITIES, identityId));
+    if (!idSnap.exists()) {
+      return { status: 404, data: { error: `Member ${identityId} tidak ditemukan` } };
+    }
+    const idData = idSnap.data();
+
+    // Outlets aktif
+    const outSnap = await getDocs(query(collection(db, COLLECTIONS.OUTLETS), where('identity_id', '==', identityId)));
+    const outlets: any[] = [];
+    outSnap.forEach(d => {
+      const o = d.data();
+      if (o.aktif !== 0) {
+        outlets.push({
+          id: o.id || d.id,
+          nama_outlet: o.nama_outlet || o.id || d.id,
+          tipe: o.tipe || 'retail',
+        });
+      }
+    });
+
+    // Hitung hak kupon dari faktur aktif sejak 1 Sep 2026
+    const invSnap = await getDocs(query(collection(db, COLLECTIONS.INVOICES), where('identity_id', '==', identityId)));
+    let totalKuponFromInvoices = 0;
+    invSnap.forEach(d => {
+      const inv = d.data();
+      if (inv.is_excluded !== 1) {
+        totalKuponFromInvoices += (Number(inv.kupon) || 0);
+      }
+    });
+
+    const isSuspended = idData.is_suspended === 1;
+    const hak_kupon = isSuspended ? 0 : totalKuponFromInvoices;
+
+    // Kupon fisik aktif yang sudah diserahkan
+    const coupSnap = await getDocs(query(collection(db, COLLECTIONS.COUPONS), where('identity_id', '==', identityId), where('status', '==', 'aktif')));
+    const sudah_diambil = coupSnap.size;
+    const sisa_kuota = isSuspended ? 0 : Math.max(0, hak_kupon - sudah_diambil);
+
+    return {
+      data: {
+        success: true,
+        quota: {
+          identity_id: identityId,
+          nama_pemilik: idData.nama_pemilik || identityId,
+          alamat: idData.alamat || '',
+          kota: idData.kota || '',
+          kecamatan: idData.kecamatan || '',
+          whatsapp: idData.whatsapp || '',
+          hak_kupon,
+          sudah_diambil,
+          sisa_kuota,
+          is_suspended: isSuspended,
+          suspend_reason: idData.suspend_reason || null,
+          outlets,
+        },
+      },
+    };
+  }
+
+  // 5b. COUPONS STOCK /api/coupons/stock
+  if (pathname === '/api/coupons/stock') {
+    const periode = searchParams.get('periode') || '2026-09';
+    const [yyyy, mm] = periode.split('-');
+    const yy = (yyyy || '2026').slice(-2);
+    const m = (mm || '09').padStart(2, '0');
+    const prefix = `ORT-KUP${yy}${m}-`;
+
+    const coupSnap = await getDocs(query(collection(db, COLLECTIONS.COUPONS), where('periode_kupon', '==', periode), where('status', '==', 'aktif')));
+    const activeSet = new Set<number>();
+    coupSnap.forEach(d => {
+      const c = d.data();
+      if (c.nomor_urut) {
+        activeSet.add(Number(c.nomor_urut));
+      } else if (c.nomor_kupon) {
+        const match = String(c.nomor_kupon).match(/-(\d{4})$/);
+        if (match) activeSet.add(parseInt(match[1], 10));
+      }
+    });
+
+    const issued_count = activeSet.size;
+    const available_count = Math.max(0, 2500 - issued_count);
+    const bundles: any[] = [];
+
+    for (let b = 1; b <= 50; b++) {
+      const start_seq = (b - 1) * 50 + 1;
+      const end_seq = b * 50;
+      const start_number = `${prefix}${String(start_seq).padStart(4, '0')}`;
+      const end_number = `${prefix}${String(end_seq).padStart(4, '0')}`;
+
+      let bundleIssued = 0;
+      for (let s = start_seq; s <= end_seq; s++) {
+        if (activeSet.has(s)) bundleIssued++;
+      }
+
+      const available = 50 - bundleIssued;
+      const status = bundleIssued === 50 ? 'taken' : bundleIssued > 0 ? 'partial' : 'available';
+
+      bundles.push({
+        bundle_no: b,
+        start_seq,
+        end_seq,
+        start_number,
+        end_number,
+        total: 50,
+        issued: bundleIssued,
+        available,
+        status,
+      });
+    }
+
+    return {
+      data: {
+        success: true,
+        stock: {
+          periode,
+          prefix,
+          capacity: 2500,
+          issued_count,
+          available_count,
+          bundles,
+        },
+      },
+    };
+  }
+
   // 5. COUPONS LOOKUP /api/coupons/lookup
   if (pathname === '/api/coupons/lookup') {
     const q = (searchParams.get('q') || body.query || body.q || '').trim().toUpperCase();
