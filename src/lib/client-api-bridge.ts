@@ -169,6 +169,369 @@ export function initClientApiBridge() {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Statement Calculation Engine (Firestore Bridge)
+// ---------------------------------------------------------------------------
+const BULAN_ID: Record<string, string> = {
+  '01': 'JANUARI', '02': 'FEBRUARI', '03': 'MARET', '04': 'APRIL',
+  '05': 'MEI', '06': 'JUNI', '07': 'JULI', '08': 'AGUSTUS',
+  '09': 'SEPTEMBER', '10': 'OKTOBER', '11': 'NOVEMBER', '12': 'DESEMBER',
+};
+
+function formatStatementBulanLabel(yyyyMM: string): string {
+  const [yyyy, mm] = yyyyMM.split('-');
+  return `${BULAN_ID[mm] || mm} ${yyyy || ''}`;
+}
+
+const PERIODE_MONTHS: string[] = [
+  '2026-09', '2026-10', '2026-11', '2026-12',
+  '2027-01', '2027-02', '2027-03', '2027-04',
+  '2027-05', '2027-06', '2027-07', '2027-08', '2027-09'
+];
+
+interface StatementBuildingBlocks {
+  identity: any;
+  outlets: any[];
+  invoices: any[];
+  penalties: any[];
+  coupons?: any[];
+  bulan: string;
+}
+
+function buildStatementDataFromMemory({
+  identity,
+  outlets,
+  invoices,
+  penalties,
+  coupons = [],
+  bulan,
+}: StatementBuildingBlocks) {
+  const identityId = identity.id;
+  const [yyyy, mm] = bulan.split('-');
+  const lastDay = new Date(Number(yyyy), Number(mm), 0).getDate();
+  const bulanStart = `${bulan}-01`;
+  const bulanEnd = `${bulan}-${String(lastDay).padStart(2, '0')}`;
+
+  // 1. Cek sanksi pada bulan ini
+  let isMonthSuspended = false;
+  let activeReason = identity.suspend_reason || null;
+  let activeType = identity.suspend_type || null;
+  let activeDari = identity.suspend_dari || null;
+  let activeSampai = identity.suspend_sampai || null;
+
+  if (identity.is_suspended === 1) {
+    if (identity.suspend_type === 'permanent') {
+      if (!identity.suspend_dari || bulanEnd >= identity.suspend_dari) {
+        isMonthSuspended = true;
+      }
+    } else if (identity.suspend_dari && identity.suspend_sampai) {
+      if (identity.suspend_dari <= bulanEnd && identity.suspend_sampai >= bulanStart) {
+        isMonthSuspended = true;
+      }
+    } else {
+      isMonthSuspended = true;
+    }
+  }
+
+  if (!isMonthSuspended && penalties.length > 0) {
+    for (const p of penalties) {
+      if (p.identity_id === identityId && p.dari <= bulanEnd && (!p.sampai || p.sampai >= bulanStart)) {
+        isMonthSuspended = true;
+        activeReason = p.alasan || activeReason;
+        activeType = p.jenis_sanksi || activeType;
+        activeDari = p.dari || activeDari;
+        activeSampai = p.sampai || activeSampai;
+        break;
+      }
+    }
+  }
+
+  // 2. Filter outlet milik identity ini
+  const memberOutlets = outlets.filter(o => o.identity_id === identityId);
+  const outletIds = new Set(memberOutlets.map(o => o.id));
+
+  // 3. Filter invoice milik member ini
+  const memberInvoices = invoices.filter(inv =>
+    inv.identity_id === identityId || (inv.outlet_id && outletIds.has(inv.outlet_id))
+  );
+
+  const nilaiKupon = 150000;
+
+  // 4. Rincian per outlet untuk bulan ini
+  const outletSummaries = memberOutlets.map(o => {
+    const tipe = (o.tipe || 'retail').toLowerCase();
+    const rate = tipe === 'grosir' ? 200000 : tipe === 'ukm' ? 50000 : 100000;
+
+    const monthInvs = memberInvoices.filter(inv =>
+      (inv.outlet_id === o.id || inv.outlet_id === o.nama_outlet) &&
+      inv.tanggal >= bulanStart && inv.tanggal <= bulanEnd
+    );
+
+    let totalTransaksi = 0;
+    let actualPoin = 0;
+    let actualKupon = 0;
+    let grossPoin = 0;
+    let grossKupon = 0;
+
+    for (const inv of monthInvs) {
+      const jml = Number(inv.jumlah) || 0;
+      totalTransaksi += jml;
+      const gPoin = Math.floor(jml / rate);
+      const gKupon = Math.floor(jml / nilaiKupon);
+      grossPoin += gPoin;
+      grossKupon += gKupon;
+
+      const isInvSuspended = isMonthSuspended || inv.is_excluded === 1;
+      if (!isInvSuspended) {
+        actualPoin += Number(inv.poin) || 0;
+        actualKupon += Number(inv.kupon) || 0;
+      }
+    }
+
+    const devaluasiPoinOutlet = isMonthSuspended ? grossPoin : Math.max(0, grossPoin - actualPoin);
+    const devaluasiKuponOutlet = isMonthSuspended ? grossKupon : Math.max(0, grossKupon - actualKupon);
+    const isOutletDevalued = isMonthSuspended || (totalTransaksi > 0 && (devaluasiPoinOutlet > 0 || devaluasiKuponOutlet > 0));
+
+    return {
+      outlet_id: o.id,
+      nama_outlet: o.nama_outlet,
+      tipe: o.tipe,
+      identity_id: identityId,
+      total_transaksi: totalTransaksi,
+      poin: isMonthSuspended ? 0 : actualPoin,
+      kupon: isMonthSuspended ? 0 : actualKupon,
+      poin_seharusnya: grossPoin,
+      kupon_seharusnya: grossKupon,
+      is_devalued: isOutletDevalued,
+      devaluasi_poin: devaluasiPoinOutlet,
+      devaluasi_kupon: devaluasiKuponOutlet,
+    };
+  });
+
+  const bulanTotal = outletSummaries.reduce(
+    (acc, o) => ({
+      transaksi: acc.transaksi + o.total_transaksi,
+      poin: acc.poin + o.poin,
+      kupon: acc.kupon + o.kupon,
+      grossPoin: acc.grossPoin + o.poin_seharusnya,
+      grossKupon: acc.grossKupon + o.kupon_seharusnya,
+      devaluasi_poin: acc.devaluasi_poin + (o.devaluasi_poin || 0),
+      devaluasi_kupon: acc.devaluasi_kupon + (o.devaluasi_kupon || 0),
+    }),
+    { transaksi: 0, poin: 0, kupon: 0, grossPoin: 0, grossKupon: 0, devaluasi_poin: 0, devaluasi_kupon: 0 }
+  );
+
+  // 5. Kumulatif aktif (1 Sep 2026 s.d. bulanEnd)
+  const cumInvoices = memberInvoices.filter(inv => inv.tanggal >= '2026-09-01' && inv.tanggal <= bulanEnd);
+  let kumulatifPoin = 0;
+  let kumulatifKupon = 0;
+  let grossCumPoin = 0;
+  let grossCumKupon = 0;
+  let transaksiTerakhir: string | null = null;
+
+  for (const inv of cumInvoices) {
+    if (!transaksiTerakhir || inv.tanggal > transaksiTerakhir) {
+      transaksiTerakhir = inv.tanggal;
+    }
+    const matchedOut = memberOutlets.find(o => o.id === inv.outlet_id);
+    const tipe = (matchedOut?.tipe || 'retail').toLowerCase();
+    const rate = tipe === 'grosir' ? 200000 : tipe === 'ukm' ? 50000 : 100000;
+    const jml = Number(inv.jumlah) || 0;
+    grossCumPoin += Math.floor(jml / rate);
+    grossCumKupon += Math.floor(jml / nilaiKupon);
+
+    if (!isMonthSuspended && !inv.is_excluded) {
+      kumulatifPoin += Number(inv.poin) || 0;
+      kumulatifKupon += Number(inv.kupon) || 0;
+    }
+  }
+
+  const totalDevaluasiKumulatifPoin = Math.max(0, grossCumPoin - kumulatifPoin);
+  const totalDevaluasiKumulatifKupon = Math.max(0, grossCumKupon - kumulatifKupon);
+  const sebelumnyaKumulatifPoin = Math.max(grossCumPoin, kumulatifPoin);
+  const sebelumnyaKumulatifKupon = Math.max(grossCumKupon, kumulatifKupon);
+  const hasDevaluasi = isMonthSuspended || totalDevaluasiKumulatifPoin > 0 || totalDevaluasiKumulatifKupon > 0;
+
+  // 6. Customer Savings
+  const monthInvoicesCount = memberInvoices.filter(inv => inv.tanggal >= bulanStart && inv.tanggal <= bulanEnd).length;
+  const savingParkirPerTrx = 2000;
+  const savingKurirPerTrx = 15000;
+  const totalHematParkir = monthInvoicesCount * savingParkirPerTrx;
+  const totalHematKurir = monthInvoicesCount * savingKurirPerTrx;
+  const totalNilaiPenghematan = totalHematParkir + totalHematKurir;
+
+  // 7. Histori 13 Bulan
+  const histori = PERIODE_MONTHS.map((m, idx) => {
+    const mStart = `${m}-01`;
+    const [y2, m2] = m.split('-');
+    const ld = new Date(Number(y2), Number(m2), 0).getDate();
+    const mEnd = `${m}-${String(ld).padStart(2, '0')}`;
+
+    const mInvs = memberInvoices.filter(inv => inv.tanggal >= mStart && inv.tanggal <= mEnd);
+    let mTotalTransaksi = 0;
+    let mActualPoin = 0;
+    let mActualKupon = 0;
+    let mGrossPoin = 0;
+    let mGrossKupon = 0;
+
+    for (const inv of mInvs) {
+      const jml = Number(inv.jumlah) || 0;
+      mTotalTransaksi += jml;
+      const matchedOut = memberOutlets.find(o => o.id === inv.outlet_id);
+      const tipe = (matchedOut?.tipe || 'retail').toLowerCase();
+      const rate = tipe === 'grosir' ? 200000 : tipe === 'ukm' ? 50000 : 100000;
+      mGrossPoin += Math.floor(jml / rate);
+      mGrossKupon += Math.floor(jml / nilaiKupon);
+      if (!inv.is_excluded) {
+        mActualPoin += Number(inv.poin) || 0;
+        mActualKupon += Number(inv.kupon) || 0;
+      }
+    }
+
+    const mIsSuspended = (m === bulan && isMonthSuspended) || (mTotalTransaksi > 0 && mActualPoin === 0 && mInvs.some(i => i.is_excluded === 1));
+
+    return {
+      no: idx + 1,
+      bulan: m,
+      label: formatStatementBulanLabel(m),
+      total_transaksi: mTotalTransaksi,
+      poin: mIsSuspended ? 0 : mActualPoin,
+      bonus_poin: 0,
+      kupon: mIsSuspended ? 0 : mActualKupon,
+      is_suspended: mIsSuspended,
+      devaluasi_poin: mIsSuspended ? mGrossPoin : Math.max(0, mGrossPoin - mActualPoin),
+      devaluasi_kupon: mIsSuspended ? mGrossKupon : Math.max(0, mGrossKupon - mActualKupon),
+      waste_rupiah: 0,
+      waste_kg: 0,
+      waste_poin: 0,
+    };
+  });
+
+  const suspendNote = isMonthSuspended
+    ? '*Pemberian Poin & Kupon dinonaktifkan sementara (Status Evaluasi Khusus)'
+    : null;
+
+  // 8. Kupon Detail
+  const activeCoupons = coupons.filter(c => c.identity_id === identityId && c.status === 'aktif');
+  const totalFisik = activeCoupons.length;
+  let kuponDetail: any;
+
+  if (totalFisik === 0) {
+    kuponDetail = {
+      total_fisik_aktif: 0,
+      items: [],
+      ranges: [],
+      pecahan: [],
+      format_mode: 'empty',
+    };
+  } else if (totalFisik <= 10) {
+    kuponDetail = {
+      total_fisik_aktif: totalFisik,
+      items: activeCoupons,
+      ranges: [],
+      pecahan: activeCoupons.map(c => c.nomor_kupon),
+      format_mode: 'full',
+    };
+  } else {
+    kuponDetail = {
+      total_fisik_aktif: totalFisik,
+      items: activeCoupons,
+      ranges: [{ start: activeCoupons[0].nomor_kupon, end: activeCoupons[activeCoupons.length - 1].nomor_kupon, count: totalFisik }],
+      pecahan: [],
+      format_mode: 'range_and_singles',
+    };
+  }
+
+  return {
+    identity_id: identityId,
+    nama_pemilik: identity.nama_pemilik || '',
+    alamat: identity.alamat || '',
+    kecamatan: identity.kecamatan || '',
+    kota: identity.kota || '',
+    kode_pos: identity.kode_pos || '',
+    provinsi: identity.provinsi || '',
+    bulan,
+    bulan_label: formatBulanLabel(bulan),
+    bulan_transaksi: bulanTotal.transaksi,
+    bulan_belanja_poin: isMonthSuspended ? 0 : bulanTotal.poin,
+    bulan_poin: isMonthSuspended ? 0 : bulanTotal.poin,
+    gross_bulan_poin: bulanTotal.grossPoin,
+    gross_waste_bulan_poin: 0,
+    devaluasi_waste_bulan_poin: 0,
+    bulan_bonus_poin: 0,
+    bulan_kupon: isMonthSuspended ? 0 : bulanTotal.kupon,
+    kumulatif_poin: kumulatifPoin,
+    kumulatif_kupon: kumulatifKupon,
+    transaksi_terakhir: transaksiTerakhir,
+    outlets: outletSummaries,
+    histori,
+    is_suspended: isMonthSuspended,
+    suspend_type: isMonthSuspended ? activeType : null,
+    suspend_dari: activeDari,
+    suspend_sampai: activeSampai,
+    suspend_reason: isMonthSuspended ? activeReason : null,
+    suspend_note: suspendNote,
+    has_devaluasi: hasDevaluasi,
+    devaluasi_bulan_poin: bulanTotal.devaluasi_poin,
+    devaluasi_bulan_kupon: bulanTotal.devaluasi_kupon,
+    sebelumnya_kumulatif_poin: sebelumnyaKumulatifPoin,
+    sebelumnya_kumulatif_kupon: sebelumnyaKumulatifKupon,
+    total_devaluasi_kumulatif_poin: totalDevaluasiKumulatifPoin,
+    total_devaluasi_kumulatif_kupon: totalDevaluasiKumulatifKupon,
+    waste_bulan_kg: 0,
+    waste_bulan_rupiah: 0,
+    waste_bulan_poin: 0,
+    waste_kumulatif_kg: 0,
+    waste_kumulatif_rupiah: 0,
+    waste_kumulatif_poin: 0,
+    outlets_waste: [],
+    hemat_trx_count: monthInvoicesCount,
+    saving_parkir_per_trx: savingParkirPerTrx,
+    saving_kurir_per_trx: savingKurirPerTrx,
+    total_hemat_parkir: totalHematParkir,
+    total_hemat_kurir: totalHematKurir,
+    total_nilai_penghematan: totalNilaiPenghematan,
+    kupon_detail: kuponDetail,
+  };
+}
+
+async function buildFirestoreStatementData(identityId: string, bulan: string) {
+  const idRef = doc(db, COLLECTIONS.IDENTITIES, identityId);
+  const idSnap = await getDoc(idRef);
+  if (!idSnap.exists()) {
+    throw new Error(`Identity ${identityId} tidak ditemukan`);
+  }
+  const identity = idSnap.data();
+
+  const [outSnap, invSnap, penSnap, coupSnap] = await Promise.all([
+    getDocs(query(collection(db, COLLECTIONS.OUTLETS), where('identity_id', '==', identityId))),
+    getDocs(collection(db, COLLECTIONS.INVOICES)),
+    getDocs(query(collection(db, COLLECTIONS.MEMBER_PENALTIES), where('identity_id', '==', identityId))),
+    getDocs(query(collection(db, COLLECTIONS.COUPONS), where('identity_id', '==', identityId))),
+  ]);
+
+  const outlets: any[] = [];
+  outSnap.forEach(d => outlets.push(d.data()));
+
+  const invoices: any[] = [];
+  invSnap.forEach(d => invoices.push(d.data()));
+
+  const penalties: any[] = [];
+  penSnap.forEach(d => penalties.push(d.data()));
+
+  const coupons: any[] = [];
+  coupSnap.forEach(d => coupons.push(d.data()));
+
+  return buildStatementDataFromMemory({
+    identity,
+    outlets,
+    invoices,
+    penalties,
+    coupons,
+    bulan,
+  });
+}
+
 async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ status?: number; data: any }> {
   const method = (init?.method || 'GET').toUpperCase();
   const parsedUrl = new URL(urlStr, window.location.origin);
@@ -1336,6 +1699,181 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
     return { data: { coupons: coupons.slice(start, start + limit), total, page, limit } };
   }
 
+  // 6b. STATEMENTS /api/statements/*
+  if (pathname.startsWith('/api/statements/') && pathname.endsWith('/finalize') && method === 'POST') {
+    const rawPath = pathname.replace('/api/statements/', '').replace('/finalize', '');
+    const parts = rawPath.split('/');
+    const identityId = decodeURIComponent(parts[0]);
+    const bulan = parts[1] || '2026-09';
+    const stmtId = `${identityId}_${bulan}`;
+    const stmtRef = doc(db, COLLECTIONS.STATEMENTS, stmtId);
+    await setDoc(stmtRef, {
+      id: stmtId,
+      identity_id: identityId,
+      bulan,
+      status: 'final',
+      updated_at: new Date().toISOString(),
+    }, { merge: true });
+
+    return {
+      data: {
+        success: true,
+        message: 'Statement berhasil dikunci sebagai FINAL!',
+      },
+    };
+  }
+
+  if (pathname === '/api/statements/batch' && method === 'GET') {
+    const bulan = searchParams.get('bulan') || '2026-09';
+    const [idSnap, outSnap, invSnap, penSnap, coupSnap, stmtSnap] = await Promise.all([
+      getDocs(collection(db, COLLECTIONS.IDENTITIES)),
+      getDocs(collection(db, COLLECTIONS.OUTLETS)),
+      getDocs(collection(db, COLLECTIONS.INVOICES)),
+      getDocs(collection(db, COLLECTIONS.MEMBER_PENALTIES)),
+      getDocs(collection(db, COLLECTIONS.COUPONS)),
+      getDocs(collection(db, COLLECTIONS.STATEMENTS)),
+    ]);
+
+    const identities: any[] = [];
+    idSnap.forEach(d => {
+      const data = d.data();
+      if (!data.id?.startsWith('999-')) identities.push(data);
+    });
+    identities.sort((a, b) => (a.nama_pemilik || '').localeCompare(b.nama_pemilik || ''));
+
+    const outlets: any[] = [];
+    outSnap.forEach(d => outlets.push(d.data()));
+
+    const invoices: any[] = [];
+    invSnap.forEach(d => invoices.push(d.data()));
+
+    const penalties: any[] = [];
+    penSnap.forEach(d => penalties.push(d.data()));
+
+    const coupons: any[] = [];
+    coupSnap.forEach(d => coupons.push(d.data()));
+
+    const stmtMap = new Map<string, any>();
+    stmtSnap.forEach(d => stmtMap.set(d.id, d.data()));
+
+    const statements: any[] = [];
+    for (const iden of identities) {
+      try {
+        const data = buildStatementDataFromMemory({
+          identity: iden,
+          outlets,
+          invoices,
+          penalties,
+          coupons,
+          bulan,
+        });
+
+        if (data.bulan_transaksi === 0 && data.kumulatif_poin === 0) {
+          continue;
+        }
+
+        const stmtId = `${iden.id}_${bulan}`;
+        const stmtRec = stmtMap.get(stmtId) || { status: 'draft', revisi: 0 };
+
+        statements.push({
+          identity: {
+            id: iden.id,
+            nama_pemilik: iden.nama_pemilik,
+            kota: iden.kota || '—',
+          },
+          statement: stmtRec,
+          data,
+        });
+      } catch (e) {
+        console.warn('Batch build error for', iden.id, e);
+      }
+    }
+
+    return {
+      data: {
+        bulan,
+        count: statements.length,
+        statements,
+      },
+    };
+  }
+
+  if (pathname.startsWith('/api/statements/') && !pathname.endsWith('/finalize') && pathname !== '/api/statements/batch' && method === 'GET') {
+    const rawPath = pathname.replace('/api/statements/', '');
+    const parts = rawPath.split('/');
+    const identityId = decodeURIComponent(parts[0]);
+    const bulan = parts[1] || '2026-09';
+
+    try {
+      const data = await buildFirestoreStatementData(identityId, bulan);
+
+      const stmtId = `${identityId}_${bulan}`;
+      const stmtRef = doc(db, COLLECTIONS.STATEMENTS, stmtId);
+      const stmtSnap = await getDoc(stmtRef);
+      let stmtRec: any;
+
+      if (!stmtSnap.exists()) {
+        stmtRec = {
+          id: stmtId,
+          identity_id: identityId,
+          bulan,
+          total_transaksi: data.bulan_transaksi,
+          total_poin: data.bulan_poin,
+          total_kupon: data.bulan_kupon,
+          kumulatif_poin: data.kumulatif_poin,
+          kumulatif_kupon: data.kumulatif_kupon,
+          status: 'draft',
+          revisi: 0,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+        await setDoc(stmtRef, stmtRec);
+      } else {
+        stmtRec = stmtSnap.data();
+        if (stmtRec.status !== 'final') {
+          await updateDoc(stmtRef, {
+            total_transaksi: data.bulan_transaksi,
+            total_poin: data.bulan_poin,
+            total_kupon: data.bulan_kupon,
+            kumulatif_poin: data.kumulatif_poin,
+            kumulatif_kupon: data.kumulatif_kupon,
+            updated_at: new Date().toISOString(),
+          });
+          stmtRec.total_transaksi = data.bulan_transaksi;
+          stmtRec.total_poin = data.bulan_poin;
+          stmtRec.total_kupon = data.bulan_kupon;
+          stmtRec.kumulatif_poin = data.kumulatif_poin;
+          stmtRec.kumulatif_kupon = data.kumulatif_kupon;
+        }
+      }
+
+      // Check unmapped in month
+      const [yyyy, mm] = bulan.split('-');
+      const lastDay = new Date(Number(yyyy), Number(mm), 0).getDate();
+      const bulanStart = `${bulan}-01`;
+      const bulanEnd = `${bulan}-${String(lastDay).padStart(2, '0')}`;
+
+      const unmappedSnap = await getDocs(query(collection(db, COLLECTIONS.INVOICES)));
+      const unmappedSet = new Set<string>();
+      unmappedSnap.forEach(d => {
+        const inv = d.data();
+        if (!inv.outlet_id && inv.nama_pos && inv.nama_pos !== 'CASH' && inv.tanggal >= bulanStart && inv.tanggal <= bulanEnd) {
+          unmappedSet.add(inv.nama_pos);
+        }
+      });
+
+      return {
+        data: {
+          statement: stmtRec,
+          data,
+          peringatan_belum_petakan: unmappedSet.size,
+        },
+      };
+    } catch (err: any) {
+      return { status: 404, data: { error: err.message || 'Gagal memuat statement data' } };
+    }
+  }
+
   // 7. DASHBOARD /api/dashboard
   if (pathname === '/api/dashboard') {
     const periodType = (searchParams.get('period') || 'all').toLowerCase();
@@ -1382,7 +1920,7 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
     const sortedMonths = Array.from(monthsSet).sort().reverse();
     const availableMonths = sortedMonths.map(m => ({
       value: m,
-      label: formatBulanLabel(m),
+      label: formatStatementBulanLabel(m),
     }));
     if (availableMonths.length === 0) {
       const cur = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
