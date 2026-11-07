@@ -2884,6 +2884,242 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
     };
   }
 
+  // 6a. COUPONS VOID /api/coupons/void
+  if (pathname === '/api/coupons/void' && method === 'POST') {
+    const { coupon_ids, nomor_kupons, batch_id, password, alasan, petugas } = body;
+
+    // Verifikasi password Owner universal
+    if (!password || String(password).trim() !== 'oriental2026') {
+      return { status: 403, data: { error: 'Password persetujuan Owner salah. Akses pembatalan kupon ditolak.' } };
+    }
+
+    if (!alasan || !String(alasan).trim()) {
+      return { status: 400, data: { error: 'Alasan pembatalan (void) kupon wajib disertakan.' } };
+    }
+
+    const nowIso = new Date().toISOString();
+    let voidedCount = 0;
+
+    if (batch_id) {
+      // 1. Update batch di coupon_batches
+      const batchRef = doc(db, COLLECTIONS.COUPON_BATCHES, String(batch_id));
+      await updateDoc(batchRef, {
+        status: 'void',
+        void_reason: String(alasan).trim(),
+        voided_at: nowIso,
+        voided_by: petugas || 'Admin',
+        updated_at: nowIso,
+      }).catch(() => {});
+
+      // 2. Cari semua kupon dengan batch_id ini yang statusnya masih 'aktif'
+      const coupSnap = await getDocs(query(collection(db, COLLECTIONS.COUPONS), where('batch_id', '==', String(batch_id)), where('status', '==', 'aktif')));
+      let currentBatch = writeBatch(db);
+      let opCount = 0;
+
+      coupSnap.forEach(d => {
+        currentBatch.update(d.ref, {
+          status: 'void',
+          void_reason: String(alasan).trim(),
+          voided_at: nowIso,
+          voided_by: petugas || 'Admin',
+          updated_at: nowIso,
+        });
+        opCount++;
+        voidedCount++;
+      });
+
+      if (opCount > 0) {
+        await currentBatch.commit();
+      }
+
+      // 3. Catat audit_log
+      try {
+        const auditRef = doc(collection(db, COLLECTIONS.AUDIT_LOG));
+        await setDoc(auditRef, {
+          id: auditRef.id,
+          tipe: 'void_coupon_batch',
+          entity_id: String(batch_id),
+          user_id: petugas || 'Admin',
+          keterangan: `Void batch #${batch_id} (${voidedCount} kupon) oleh ${petugas}. Alasan: ${alasan}`,
+          created_at: nowIso,
+        });
+      } catch {}
+    } else {
+      const targets: string[] = [];
+      if (nomor_kupons && Array.isArray(nomor_kupons)) {
+        nomor_kupons.forEach(n => targets.push(String(n).trim()));
+      }
+      if (coupon_ids && Array.isArray(coupon_ids)) {
+        coupon_ids.forEach(n => targets.push(String(n).trim()));
+      }
+
+      if (targets.length === 0) {
+        return { status: 400, data: { error: 'Tidak ada kupon atau batch yang dipilih untuk di-void.' } };
+      }
+
+      let currentBatch = writeBatch(db);
+      let opCount = 0;
+
+      for (const t of targets) {
+        const cRef = doc(db, COLLECTIONS.COUPONS, t);
+        const cSnap = await getDoc(cRef);
+        if (cSnap.exists()) {
+          currentBatch.update(cRef, {
+            status: 'void',
+            void_reason: String(alasan).trim(),
+            voided_at: nowIso,
+            voided_by: petugas || 'Admin',
+            updated_at: nowIso,
+          });
+          opCount++;
+          voidedCount++;
+        } else {
+          const qSnap = await getDocs(query(collection(db, COLLECTIONS.COUPONS), where('nomor_kupon', '==', t), where('status', '==', 'aktif')));
+          qSnap.forEach(d => {
+            currentBatch.update(d.ref, {
+              status: 'void',
+              void_reason: String(alasan).trim(),
+              voided_at: nowIso,
+              voided_by: petugas || 'Admin',
+              updated_at: nowIso,
+            });
+            opCount++;
+            voidedCount++;
+          });
+        }
+
+        if (opCount >= 400) {
+          await currentBatch.commit();
+          currentBatch = writeBatch(db);
+          opCount = 0;
+        }
+      }
+
+      if (opCount > 0) {
+        await currentBatch.commit();
+      }
+
+      try {
+        const auditRef = doc(collection(db, COLLECTIONS.AUDIT_LOG));
+        await setDoc(auditRef, {
+          id: auditRef.id,
+          tipe: 'void_coupons',
+          entity_id: targets.slice(0, 5).join(','),
+          user_id: petugas || 'Admin',
+          keterangan: `Void ${voidedCount} kupon oleh ${petugas}. Alasan: ${alasan}`,
+          created_at: nowIso,
+        });
+      } catch {}
+    }
+
+    return {
+      data: {
+        success: true,
+        voided_count: voidedCount,
+        message: `Berhasil membatalkan (void) ${voidedCount} kupon.`,
+      },
+    };
+  }
+
+  // 6b. COUPONS EXPORT /api/coupons/export
+  if (pathname === '/api/coupons/export') {
+    const q = (searchParams.get('q') || '').toLowerCase().trim();
+    const status = (searchParams.get('status') || 'all').toLowerCase().trim();
+    const periode = (searchParams.get('periode') || 'all').trim();
+    const outlet_id = (searchParams.get('outlet_id') || '').trim();
+
+    const [coupSnap, idSnap, outSnap, batchSnap] = await Promise.all([
+      getDocs(collection(db, COLLECTIONS.COUPONS)),
+      getDocs(collection(db, COLLECTIONS.IDENTITIES)),
+      getDocs(collection(db, COLLECTIONS.OUTLETS)),
+      getDocs(collection(db, COLLECTIONS.COUPON_BATCHES)),
+    ]);
+
+    const idMap = new Map<string, any>();
+    idSnap.forEach(d => idMap.set(d.id, d.data()));
+
+    const outMap = new Map<string, any>();
+    outSnap.forEach(d => outMap.set(d.id, d.data()));
+
+    const batchMap = new Map<string, any>();
+    batchSnap.forEach(d => batchMap.set(d.id, d.data()));
+
+    let coupons: any[] = [];
+    coupSnap.forEach(d => {
+      const c = d.data();
+      const isWalkIn = c.tipe_penerima === 'walk_in';
+      const iden = c.identity_id ? idMap.get(c.identity_id) : null;
+      const out = c.outlet_asal_id ? outMap.get(c.outlet_asal_id) : null;
+      const bInfo = c.batch_id ? batchMap.get(String(c.batch_id)) : null;
+
+      coupons.push({
+        id: c.id || d.id,
+        nomor_kupon: c.nomor_kupon || d.id,
+        periode_kupon: c.periode_kupon || '2026-09',
+        nomor_urut: c.nomor_urut || 1,
+        status: c.status || 'aktif',
+        tanggal_serah: c.tanggal_serah || (c.created_at ? String(c.created_at).slice(0, 10) : '2026-09-01'),
+        petugas: c.petugas || '—',
+        tipe_penerima: isWalkIn ? 'walk_in' : 'member',
+        nama_walk_in: c.nama_walk_in || null,
+        no_hp_walk_in: c.no_hp_walk_in || null,
+        no_invoice: c.no_invoice || null,
+        whatsapp: c.whatsapp || iden?.whatsapp || '-',
+        waktu_input: c.created_at || new Date().toISOString(),
+        batch_id: c.batch_id || '-',
+        identity_id: isWalkIn ? 'NON-MEMBER' : (c.identity_id || '-'),
+        nama_pemilik: isWalkIn ? (c.nama_walk_in || 'Walk-In') : (iden?.nama_pemilik || c.identity_id || '-'),
+        alamat: isWalkIn ? 'Transaksi Kasir Langsung' : (iden?.alamat || '-'),
+        kota: isWalkIn ? (c.no_invoice ? `Struk: ${c.no_invoice}` : '-') : (iden?.kota || '-'),
+        kecamatan: isWalkIn ? '-' : (iden?.kecamatan || '-'),
+        outlet_id: isWalkIn ? '-' : (c.outlet_asal_id || '-'),
+        nama_outlet: isWalkIn ? 'Kasir Retail Non-Member' : (out?.nama_outlet || c.outlet_asal_id || '-'),
+        outlet_tipe: isWalkIn ? 'RETAIL' : (String(out?.tipe || 'retail').toUpperCase()),
+        keterangan_batch: bInfo?.keterangan || '-',
+      });
+    });
+
+    if (status !== 'all') coupons = coupons.filter(c => c.status === status);
+    if (periode !== 'all') coupons = coupons.filter(c => c.periode_kupon === periode);
+    if (outlet_id) coupons = coupons.filter(c => c.outlet_id === outlet_id);
+    if (q) {
+      coupons = coupons.filter(c =>
+        c.nomor_kupon.toLowerCase().includes(q) ||
+        c.nama_pemilik.toLowerCase().includes(q) ||
+        (c.nama_walk_in && c.nama_walk_in.toLowerCase().includes(q)) ||
+        (c.no_invoice && c.no_invoice.toLowerCase().includes(q)) ||
+        (c.petugas && c.petugas.toLowerCase().includes(q))
+      );
+    }
+
+    coupons.sort((a, b) => b.periode_kupon.localeCompare(a.periode_kupon) || a.nomor_urut - b.nomor_urut);
+
+    const rows = coupons.map((r, idx) => ({
+      'No': idx + 1,
+      'Nomor Kupon': r.nomor_kupon,
+      'Periode': r.periode_kupon,
+      'Nomor Urut': r.nomor_urut,
+      'Status': r.status === 'aktif' ? 'AKTIF' : 'VOID (BATAL)',
+      'Tipe Penerima': r.tipe_penerima === 'walk_in' ? 'CASH WALK-IN' : 'MEMBER',
+      'ID Member': r.identity_id,
+      'Nama Pelanggan': r.nama_pemilik,
+      'No. WhatsApp/HP': r.whatsapp,
+      'No. Struk POS': r.no_invoice || '-',
+      'Outlet Asal': r.nama_outlet,
+      'ID Outlet': r.outlet_id,
+      'Lini Bisnis': r.outlet_tipe,
+      'Tanggal Serah': r.tanggal_serah,
+      'Petugas': r.petugas,
+      'Waktu Input': r.waktu_input,
+      'ID Batch': r.batch_id,
+      'Alamat': r.alamat,
+      'Kota': r.kota,
+      'Keterangan': r.keterangan_batch,
+    }));
+
+    return { data: { success: true, rows } };
+  }
+
   // 6b. STATEMENTS /api/statements/*
   if (pathname.startsWith('/api/statements/') && pathname.endsWith('/finalize') && method === 'POST') {
     const rawPath = pathname.replace('/api/statements/', '').replace('/finalize', '');

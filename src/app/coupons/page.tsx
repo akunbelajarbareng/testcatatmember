@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useTransition } from "react";
 import { useSearchParams } from "next/navigation";
+import * as XLSX from "xlsx";
 import {
   Ticket,
   Search,
@@ -676,6 +677,52 @@ function CouponsContent() {
     }
   };
 
+  const [exporting, setExporting] = useState(false);
+  const handleExportExcel = async () => {
+    setExporting(true);
+    try {
+      const res = await fetch("/api/coupons/export");
+      const json = await res.json();
+      const rows = json.rows || [];
+      if (rows.length === 0) {
+        alert("Tidak ada data kupon untuk diekspor");
+        return;
+      }
+      const worksheet = XLSX.utils.json_to_sheet(rows);
+      worksheet["!cols"] = [
+        { wch: 6 },  // No
+        { wch: 20 }, // Nomor Kupon
+        { wch: 12 }, // Periode
+        { wch: 12 }, // Nomor Urut
+        { wch: 14 }, // Status
+        { wch: 16 }, // Tipe Penerima
+        { wch: 18 }, // ID Member
+        { wch: 26 }, // Nama Pelanggan
+        { wch: 16 }, // No. WhatsApp/HP
+        { wch: 18 }, // No. Struk POS
+        { wch: 26 }, // Outlet Asal
+        { wch: 16 }, // ID Outlet
+        { wch: 12 }, // Lini Bisnis
+        { wch: 14 }, // Tanggal Serah
+        { wch: 16 }, // Petugas
+        { wch: 22 }, // Waktu Input
+        { wch: 16 }, // ID Batch
+        { wch: 26 }, // Alamat
+        { wch: 16 }, // Kota
+        { wch: 26 }, // Keterangan
+      ];
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Rekap Kupon");
+      const dateStr = new Date().toISOString().slice(0, 10);
+      XLSX.writeFile(workbook, `Oriental_CRM_Rekap_Kupon_${dateStr}.xlsx`);
+    } catch (err) {
+      console.error("Export error:", err);
+      alert("Gagal mengekspor data kupon Excel");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <div className="fade-in" style={{ padding: "28px 36px", maxWidth: 1280, margin: "0 auto" }}>
       {/* ========================================================
@@ -711,13 +758,19 @@ function CouponsContent() {
         </div>
 
         {/* Global Export Button */}
-        <a
-          href="/api/coupons/export"
+        <button
+          onClick={handleExportExcel}
+          disabled={exporting}
           className="btn btn-outline btn-sm"
           style={{ display: "flex", alignItems: "center", gap: 6 }}
         >
-          <Download size={14} /> Export Rekap Excel (.xlsx)
-        </a>
+          {exporting ? (
+            <RefreshCw size={14} style={{ animation: "spin .7s linear infinite" }} />
+          ) : (
+            <Download size={14} />
+          )}
+          {exporting ? "Mengekspor..." : "Export Rekap Excel (.xlsx)"}
+        </button>
       </div>
 
       {/* ========================================================
