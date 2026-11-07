@@ -103,6 +103,18 @@ function parseKode102(rawKode: string): KodeInfo {
   return { tipe: 'invalid', reason: `jumlah segmen tidak valid (${seg.length} segmen)`, clean };
 }
 
+const BULAN_NAMES: Record<string, string> = {
+  '01': 'Januari', '02': 'Februari', '03': 'Maret', '04': 'April',
+  '05': 'Mei', '06': 'Juni', '07': 'Juli', '08': 'Agustus',
+  '09': 'September', '10': 'Oktober', '11': 'November', '12': 'Desember',
+};
+
+function formatBulanLabel(yyyyMM: string): string {
+  if (!yyyyMM || !yyyyMM.includes('-')) return yyyyMM || '';
+  const [y, m] = yyyyMM.split('-');
+  return `${BULAN_NAMES[m] || m} ${y}`;
+}
+
 // ---------------------------------------------------------------------------
 // In-Memory & Local Storage Helpers
 // ---------------------------------------------------------------------------
@@ -549,47 +561,194 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
 
   // 7. DASHBOARD /api/dashboard
   if (pathname === '/api/dashboard') {
-    let idCountVal = 0;
-    let outCountVal = 0;
-    let coupCountVal = 0;
-    let invCountVal = 0;
+    const periodType = (searchParams.get('period') || 'all').toLowerCase();
+    const month = searchParams.get('month') || '';
+    const year = searchParams.get('year') || '';
+    const startDate = searchParams.get('start_date') || '';
+    const endDate = searchParams.get('end_date') || '';
 
-    try {
-      const [idCount, outCount, coupCount, invCount] = await Promise.all([
-        getCountFromServer(collection(db, COLLECTIONS.IDENTITIES)),
-        getCountFromServer(collection(db, COLLECTIONS.OUTLETS)),
-        getCountFromServer(collection(db, COLLECTIONS.COUPONS)),
-        getCountFromServer(collection(db, COLLECTIONS.INVOICES)),
-      ]);
-      idCountVal = idCount.data().count;
-      outCountVal = outCount.data().count;
-      coupCountVal = coupCount.data().count;
-      invCountVal = invCount.data().count;
-    } catch {}
+    // Ambil data koleksi secara paralel
+    const [invSnap, outSnap, idSnap, batchSnap, coupSnap] = await Promise.all([
+      getDocs(collection(db, COLLECTIONS.INVOICES)),
+      getDocs(collection(db, COLLECTIONS.OUTLETS)),
+      getDocs(collection(db, COLLECTIONS.IDENTITIES)),
+      getDocs(collection(db, COLLECTIONS.IMPORT_BATCHES)),
+      getCountFromServer(collection(db, COLLECTIONS.COUPONS)).catch(() => ({ data: () => ({ count: 0 }) })),
+    ]);
 
-    const now = new Date();
-    const currentMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-    const currentYearStr = String(now.getFullYear());
+    const outletMap = new Map<string, any>();
+    outSnap.forEach(d => outletMap.set(d.id, d.data()));
+
+    const identityMap = new Map<string, any>();
+    idSnap.forEach(d => identityMap.set(d.id, d.data()));
+
+    // Kumpulkan invoices dan distinct bulan/tahun
+    const allInvoices: any[] = [];
+    const monthsSet = new Set<string>();
+
+    invSnap.forEach(d => {
+      const inv = d.data();
+      allInvoices.push(inv);
+      const m = inv.bulan || (inv.tanggal ? String(inv.tanggal).slice(0, 7) : '');
+      if (m && /^\d{4}-\d{2}$/.test(m)) {
+        monthsSet.add(m);
+      }
+    });
+
+    const sortedMonths = Array.from(monthsSet).sort().reverse();
+    const availableMonths = sortedMonths.map(m => ({
+      value: m,
+      label: formatBulanLabel(m),
+    }));
+    if (availableMonths.length === 0) {
+      const cur = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+      availableMonths.push({ value: cur, label: formatBulanLabel(cur) });
+    }
+
+    const yearsSet = new Set<string>();
+    sortedMonths.forEach(m => yearsSet.add(m.slice(0, 4)));
+    const availableYears = Array.from(yearsSet).sort().reverse();
+    if (availableYears.length === 0) {
+      availableYears.push(String(new Date().getFullYear()));
+    }
+
+    // Filter tanggal
+    let periodLabel = 'Semua Periode (All-Time)';
+    let activeStartDate = '';
+    let activeEndDate = '';
+
+    if (periodType === 'monthly' && month) {
+      periodLabel = `Bulan ${formatBulanLabel(month)}`;
+      activeStartDate = `${month}-01`;
+      activeEndDate = `${month}-31`;
+    } else if (periodType === 'yearly' && year) {
+      periodLabel = `Tahun ${year}`;
+      activeStartDate = `${year}-01-01`;
+      activeEndDate = `${year}-12-31`;
+    } else if (periodType === 'custom' && startDate && endDate) {
+      periodLabel = `${startDate} s.d. ${endDate}`;
+      activeStartDate = startDate;
+      activeEndDate = endDate;
+    }
+
+    const filteredInvoices = allInvoices.filter(inv => {
+      if (inv.is_excluded === 1) return false;
+      const tgl = String(inv.tanggal || '');
+      const bln = inv.bulan || tgl.slice(0, 7);
+
+      if (periodType === 'monthly' && month) {
+        return bln === month || tgl.startsWith(month);
+      }
+      if (periodType === 'yearly' && year) {
+        return bln.startsWith(year) || tgl.startsWith(year);
+      }
+      if (periodType === 'custom' && startDate && endDate) {
+        return tgl >= startDate && tgl <= endDate;
+      }
+      return true;
+    });
+
+    let total_poin = 0;
+    let total_kupon = 0;
+    let total_transaksi = 0;
+    let unmappedCount = 0;
+
+    const byLiniBisnisMap: Record<string, { tipe: string; trx_count: number; total_transaksi: number; total_poin: number; total_kupon: number }> = {
+      retail: { tipe: 'retail', trx_count: 0, total_transaksi: 0, total_poin: 0, total_kupon: 0 },
+      grosir: { tipe: 'grosir', trx_count: 0, total_transaksi: 0, total_poin: 0, total_kupon: 0 },
+      ukm: { tipe: 'ukm', trx_count: 0, total_transaksi: 0, total_poin: 0, total_kupon: 0 },
+    };
+
+    const memberAgg = new Map<string, { id: string; trx_count: number; total_transaksi: number; total_poin: number; total_kupon: number }>();
+    const trendAgg = new Map<string, { bulan: string; trx_count: number; total_transaksi: number; total_poin: number; total_kupon: number }>();
+
+    for (const inv of filteredInvoices) {
+      const outlet = inv.outlet_id ? outletMap.get(inv.outlet_id) : null;
+      const jumlah = Number(inv.jumlah) || 0;
+      const poin = Number(inv.poin) || 0;
+      const kupon = Number(inv.kupon) || 0;
+
+      if (!inv.outlet_id) {
+        unmappedCount++;
+      } else {
+        total_transaksi += jumlah;
+        total_poin += poin;
+        total_kupon += kupon;
+
+        const rawTipe = String(outlet?.tipe || 'retail').toLowerCase();
+        const tipe = rawTipe === 'grosir' ? 'grosir' : rawTipe === 'ukm' ? 'ukm' : 'retail';
+        byLiniBisnisMap[tipe].trx_count += 1;
+        byLiniBisnisMap[tipe].total_transaksi += jumlah;
+        byLiniBisnisMap[tipe].total_poin += poin;
+        byLiniBisnisMap[tipe].total_kupon += kupon;
+
+        const idenId = inv.identity_id || outlet?.identity_id;
+        if (idenId) {
+          const m = memberAgg.get(idenId) || { id: idenId, trx_count: 0, total_transaksi: 0, total_poin: 0, total_kupon: 0 };
+          m.trx_count += 1;
+          m.total_transaksi += jumlah;
+          m.total_poin += poin;
+          m.total_kupon += kupon;
+          memberAgg.set(idenId, m);
+        }
+      }
+
+      const bln = inv.bulan || (inv.tanggal ? String(inv.tanggal).slice(0, 7) : '2026-09');
+      const tr = trendAgg.get(bln) || { bulan: bln, trx_count: 0, total_transaksi: 0, total_poin: 0, total_kupon: 0 };
+      tr.trx_count += 1;
+      tr.total_transaksi += jumlah;
+      tr.total_poin += poin;
+      tr.total_kupon += kupon;
+      trendAgg.set(bln, tr);
+    }
+
+    const topMembers = Array.from(memberAgg.values())
+      .map(m => {
+        const iden = identityMap.get(m.id);
+        return {
+          ...m,
+          nama_pemilik: iden?.nama_pemilik || m.id,
+          kota: iden?.kota || 'WATAMPONE',
+        };
+      })
+      .sort((a, b) => b.total_poin - a.total_poin || b.total_transaksi - a.total_transaksi)
+      .slice(0, 5);
+
+    const monthlyTrend = Array.from(trendAgg.values())
+      .sort((a, b) => a.bulan.localeCompare(b.bulan))
+      .map(t => ({
+        ...t,
+        label: formatBulanLabel(t.bulan),
+      }));
+
+    // Info batch import terakhir
+    let lastImport: any = null;
+    const batches: any[] = [];
+    batchSnap.forEach(d => batches.push(d.data()));
+    if (batches.length > 0) {
+      batches.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+      lastImport = batches[0];
+    }
+
+    const coupCount = (coupSnap as any)?.data ? (coupSnap as any).data().count : 0;
 
     return {
       data: {
         periodInfo: {
-          type: 'all',
-          label: 'Semua Periode (Awal Baru: 0 Trx)',
-          month: currentMonthStr,
-          year: currentYearStr,
-          startDate: `${currentYearStr}-01-01`,
-          endDate: `${currentYearStr}-12-31`,
+          type: periodType,
+          label: periodLabel,
+          month: month || (availableMonths[0]?.value || '2026-09'),
+          year: year || (availableYears[0] || '2026'),
+          startDate: activeStartDate,
+          endDate: activeEndDate,
         },
-        availableMonths: [
-          { value: currentMonthStr, label: `Periode Berjalan (${currentMonthStr})` },
-        ],
-        availableYears: [currentYearStr],
+        availableMonths,
+        availableYears,
         totals: {
-          total_poin: 0,
-          total_kupon: coupCountVal,
-          total_transaksi: 0,
-          total_invoices: invCountVal,
+          total_poin,
+          total_kupon: total_kupon || coupCount,
+          total_transaksi,
+          total_invoices: allInvoices.length,
         },
         wasteTotals: {
           total_waste_trx: 0,
@@ -598,20 +757,25 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
           total_waste_poin: 0,
         },
         byLiniBisnis: [
-          { tipe: 'retail', trx_count: 0, total_transaksi: 0, total_poin: 0, total_kupon: 0 },
-          { tipe: 'grosir', trx_count: 0, total_transaksi: 0, total_poin: 0, total_kupon: 0 },
-          { tipe: 'ukm', trx_count: 0, total_transaksi: 0, total_poin: 0, total_kupon: 0 },
+          byLiniBisnisMap.retail,
+          byLiniBisnisMap.ukm,
+          byLiniBisnisMap.grosir,
         ],
-        topMembers: [],
-        monthlyTrend: [],
+        topMembers,
+        monthlyTrend,
         globalStats: {
-          totalIdentities: idCountVal,
-          totalOutlets: outCountVal,
+          totalIdentities: idSnap.size,
+          totalOutlets: outSnap.size,
           totalAliases: 20,
-          totalRawInvoices: invCountVal,
+          totalRawInvoices: allInvoices.length,
           pendingApprovals: 0,
-          belumPetakan: 0,
-          lastImport: null,
+          belumPetakan: unmappedCount,
+          lastImport: lastImport ? {
+            filename: lastImport.filename || '',
+            created_at: lastImport.created_at || '',
+            bulan: lastImport.bulan || '2026-09',
+            tipe: lastImport.tipe || 'transaksi',
+          } : null,
           statementStats: [
             { status: 'draft', jumlah: 0 },
             { status: 'final', jumlah: 0 },
