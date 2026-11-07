@@ -67,6 +67,7 @@ interface DashboardData {
     totalRawInvoices: number;
     pendingApprovals: number;
     belumPetakan: number;
+    belumPetakanInvoices?: number;
     lastImport: { filename: string; created_at: string; bulan: string; tipe: string } | null;
     statementStats: { status: string; jumlah: number }[];
   };
@@ -288,7 +289,7 @@ export default function DashboardPage() {
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <GitMerge size={16} style={{ flexShrink: 0 }} />
               <span>
-                <strong>{data?.globalStats?.belumPetakan} nama POS</strong> di transaksi kasir belum dipetakan ke lini bisnis outlet mana pun.
+                <strong>{data?.globalStats?.belumPetakan} nama POS</strong> ({fmt(data?.globalStats?.belumPetakanInvoices || 0)} transaksi kasir) belum dipetakan ke lini bisnis outlet mana pun.
               </span>
             </div>
             <span style={{ fontSize: 12, fontWeight: 600, textDecoration: "underline" }}>Petakan Sekarang →</span>

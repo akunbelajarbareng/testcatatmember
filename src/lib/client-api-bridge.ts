@@ -2451,6 +2451,7 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
     let total_kupon = 0;
     let total_transaksi = 0;
     let unmappedCount = 0;
+    const unmappedNamesSet = new Set<string>();
 
     const byLiniBisnisMap: Record<string, { tipe: string; trx_count: number; total_transaksi: number; total_poin: number; total_kupon: number }> = {
       retail: { tipe: 'retail', trx_count: 0, total_transaksi: 0, total_poin: 0, total_kupon: 0 },
@@ -2469,6 +2470,10 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
 
       if (!inv.outlet_id) {
         unmappedCount++;
+        const nPos = (inv.nama_pos || '').trim();
+        if (nPos && nPos.toUpperCase() !== 'CASH') {
+          unmappedNamesSet.add(nPos);
+        }
       } else {
         total_transaksi += jumlah;
         total_poin += poin;
@@ -2568,7 +2573,8 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
           totalAliases: 20,
           totalRawInvoices: allInvoices.length,
           pendingApprovals: pendingApprovalsCount,
-          belumPetakan: unmappedCount,
+          belumPetakan: unmappedNamesSet.size,
+          belumPetakanInvoices: unmappedCount,
           lastImport: lastImport ? {
             filename: lastImport.filename || '',
             created_at: lastImport.created_at || '',
