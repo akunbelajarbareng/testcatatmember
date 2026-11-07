@@ -479,12 +479,376 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
     };
   }
 
-  // 4d. ALIASES /api/aliases
+  // 4d. ALIASES /api/aliases and /api/aliases/transfer
+  if (pathname === '/api/aliases/transfer' && method === 'POST') {
+    const namaPos = (body.nama_pos || '').trim();
+    const targetOutletId = (body.target_outlet_id || '').trim();
+    if (!namaPos || !targetOutletId) {
+      return { status: 400, data: { error: 'nama_pos dan target_outlet_id wajib diisi' } };
+    }
+
+    const outSnap = await getDoc(doc(db, COLLECTIONS.OUTLETS, targetOutletId));
+    if (!outSnap.exists()) {
+      return { status: 404, data: { error: 'Outlet tujuan tidak ditemukan' } };
+    }
+    const outletData = outSnap.data();
+
+    // Upsert pos_aliases
+    const aliasId = `alias_${namaPos.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+    await setDoc(doc(db, COLLECTIONS.POS_ALIASES, aliasId), {
+      id: aliasId,
+      nama_pos: namaPos,
+      outlet_id: targetOutletId,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }, { merge: true });
+
+    // Update semua invoice dengan nama_pos ini
+    const invSnap = await getDocs(query(collection(db, COLLECTIONS.INVOICES), where('nama_pos', '==', namaPos)));
+    let currentBatch = writeBatch(db);
+    let opCount = 0;
+    let addedPoin = 0;
+    let addedKupon = 0;
+    let addedTrx = 0;
+
+    const rate = outletData.tipe === 'grosir' ? 200000 : outletData.tipe === 'ukm' ? 50000 : 100000;
+
+    invSnap.forEach(d => {
+      const inv = d.data();
+      const jumlah = Number(inv.jumlah) || 0;
+      const poin = Math.floor(jumlah / rate);
+      const kupon = Math.floor(jumlah / 150000);
+
+      currentBatch.update(d.ref, {
+        outlet_id: targetOutletId,
+        identity_id: outletData.identity_id,
+        poin,
+        kupon,
+        updated_at: new Date().toISOString(),
+      });
+      opCount++;
+      addedTrx += jumlah;
+      addedPoin += poin;
+      addedKupon += kupon;
+    });
+
+    if (opCount > 0) {
+      await currentBatch.commit();
+    }
+
+    // Update outlet & identity stats
+    if (addedPoin > 0 || addedKupon > 0 || addedTrx > 0) {
+      await updateDoc(doc(db, COLLECTIONS.OUTLETS, targetOutletId), {
+        total_transaksi: (outletData.total_transaksi || 0) + addedTrx,
+        total_poin: (outletData.total_poin || 0) + addedPoin,
+        total_kupon: (outletData.total_kupon || 0) + addedKupon,
+        updated_at: new Date().toISOString(),
+      });
+      if (outletData.identity_id) {
+        const idRef = doc(db, COLLECTIONS.IDENTITIES, outletData.identity_id);
+        const idSnap = await getDoc(idRef);
+        if (idSnap.exists()) {
+          const idData = idSnap.data();
+          await updateDoc(idRef, {
+            total_poin: (idData.total_poin || 0) + addedPoin,
+            total_kupon: (idData.total_kupon || 0) + addedKupon,
+            updated_at: new Date().toISOString(),
+          });
+        }
+      }
+    }
+
+    return { data: { success: true, message: `Alias "${namaPos}" berhasil dipindahkan ke outlet ${targetOutletId}` } };
+  }
+
   if (pathname === '/api/aliases') {
-    const snap = await getDocs(collection(db, COLLECTIONS.POS_ALIASES));
-    const aliases: any[] = [];
-    snap.forEach(d => aliases.push(d.data()));
+    if (method === 'POST') {
+      const namaPos = (body.nama_pos || '').trim();
+      const outletId = (body.outlet_id || '').trim();
+      if (!namaPos || !outletId) {
+        return { status: 400, data: { error: 'nama_pos dan outlet_id wajib diisi' } };
+      }
+
+      const outSnap = await getDoc(doc(db, COLLECTIONS.OUTLETS, outletId));
+      if (!outSnap.exists()) {
+        return { status: 404, data: { error: 'Outlet tidak ditemukan' } };
+      }
+      const outletData = outSnap.data();
+
+      const aliasId = `alias_${namaPos.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+      await setDoc(doc(db, COLLECTIONS.POS_ALIASES, aliasId), {
+        id: aliasId,
+        nama_pos: namaPos,
+        outlet_id: outletId,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }, { merge: true });
+
+      // Update semua invoice dengan nama_pos ini
+      const invSnap = await getDocs(query(collection(db, COLLECTIONS.INVOICES), where('nama_pos', '==', namaPos)));
+      let currentBatch = writeBatch(db);
+      let opCount = 0;
+      let addedPoin = 0;
+      let addedKupon = 0;
+      let addedTrx = 0;
+
+      const rate = outletData.tipe === 'grosir' ? 200000 : outletData.tipe === 'ukm' ? 50000 : 100000;
+
+      invSnap.forEach(d => {
+        const inv = d.data();
+        const jumlah = Number(inv.jumlah) || 0;
+        const poin = Math.floor(jumlah / rate);
+        const kupon = Math.floor(jumlah / 150000);
+
+        currentBatch.update(d.ref, {
+          outlet_id: outletId,
+          identity_id: outletData.identity_id,
+          poin,
+          kupon,
+          updated_at: new Date().toISOString(),
+        });
+        opCount++;
+        addedTrx += jumlah;
+        addedPoin += poin;
+        addedKupon += kupon;
+      });
+
+      if (opCount > 0) {
+        await currentBatch.commit();
+      }
+
+      if (addedPoin > 0 || addedKupon > 0 || addedTrx > 0) {
+        await updateDoc(doc(db, COLLECTIONS.OUTLETS, outletId), {
+          total_transaksi: (outletData.total_transaksi || 0) + addedTrx,
+          total_poin: (outletData.total_poin || 0) + addedPoin,
+          total_kupon: (outletData.total_kupon || 0) + addedKupon,
+          updated_at: new Date().toISOString(),
+        });
+        if (outletData.identity_id) {
+          const idRef = doc(db, COLLECTIONS.IDENTITIES, outletData.identity_id);
+          const idSnap = await getDoc(idRef);
+          if (idSnap.exists()) {
+            const idData = idSnap.data();
+            await updateDoc(idRef, {
+              total_poin: (idData.total_poin || 0) + addedPoin,
+              total_kupon: (idData.total_kupon || 0) + addedKupon,
+              updated_at: new Date().toISOString(),
+            });
+          }
+        }
+      }
+
+      return { data: { success: true, message: `"${namaPos}" berhasil dipetakan ke outlet ${outletId}` } };
+    }
+
+    if (method === 'DELETE') {
+      const aliasId = body.id || '';
+      let targetNamaPos = '';
+
+      if (aliasId) {
+        const snap = await getDoc(doc(db, COLLECTIONS.POS_ALIASES, String(aliasId)));
+        if (snap.exists()) {
+          targetNamaPos = snap.data().nama_pos;
+          await deleteDoc(snap.ref);
+        }
+      }
+
+      if (targetNamaPos) {
+        const invSnap = await getDocs(query(collection(db, COLLECTIONS.INVOICES), where('nama_pos', '==', targetNamaPos)));
+        let currentBatch = writeBatch(db);
+        let opCount = 0;
+        invSnap.forEach(d => {
+          currentBatch.update(d.ref, {
+            outlet_id: null,
+            identity_id: null,
+            poin: 0,
+            kupon: 0,
+            updated_at: new Date().toISOString(),
+          });
+          opCount++;
+        });
+        if (opCount > 0) await currentBatch.commit();
+      }
+
+      return { data: { success: true, message: 'Alias berhasil dilepaskan' } };
+    }
+
+    // GET /api/aliases
+    const q = (searchParams.get('q') || '').toLowerCase().trim();
+    const belum = searchParams.get('belum') === '1';
+
+    if (belum) {
+      // Ambil nama transaksi yang belum punya outlet_id dan bukan CASH
+      const invSnap = await getDocs(collection(db, COLLECTIONS.INVOICES));
+      const unmappedMap = new Map<string, { nama_pos: string; jumlah_transaksi: number; total_jumlah: number }>();
+
+      invSnap.forEach(d => {
+        const inv = d.data();
+        const nama = (inv.nama_pos || '').trim();
+        if (!inv.outlet_id && nama && nama.toUpperCase() !== 'CASH') {
+          const existing = unmappedMap.get(nama) || { nama_pos: nama, jumlah_transaksi: 0, total_jumlah: 0 };
+          existing.jumlah_transaksi += 1;
+          existing.total_jumlah += (Number(inv.jumlah) || 0);
+          unmappedMap.set(nama, existing);
+        }
+      });
+
+      let rows = Array.from(unmappedMap.values());
+      if (q) {
+        rows = rows.filter(r => r.nama_pos.toLowerCase().includes(q));
+      }
+      rows.sort((a, b) => b.jumlah_transaksi - a.jumlah_transaksi);
+      return { data: { rows } };
+    }
+
+    // Sudah dipetakan: list pos_aliases join outlets & identities
+    const [aliasSnap, outSnap, idSnap] = await Promise.all([
+      getDocs(collection(db, COLLECTIONS.POS_ALIASES)),
+      getDocs(collection(db, COLLECTIONS.OUTLETS)),
+      getDocs(collection(db, COLLECTIONS.IDENTITIES)),
+    ]);
+
+    const outletMap = new Map<string, any>();
+    outSnap.forEach(d => outletMap.set(d.id, d.data()));
+
+    const identityMap = new Map<string, any>();
+    idSnap.forEach(d => identityMap.set(d.id, d.data()));
+
+    let aliases: any[] = [];
+    aliasSnap.forEach(d => {
+      const a = d.data();
+      const out = outletMap.get(a.outlet_id);
+      const iden = out ? identityMap.get(out.identity_id) : null;
+
+      aliases.push({
+        id: d.id,
+        nama_pos: a.nama_pos,
+        outlet_id: a.outlet_id,
+        created_at: a.created_at || new Date().toISOString(),
+        nama_outlet: out?.nama_outlet || a.outlet_id,
+        tipe: out?.tipe || 'retail',
+        identity_id: out?.identity_id || '—',
+        nama_pemilik: iden?.nama_pemilik || '—',
+      });
+    });
+
+    if (q) {
+      aliases = aliases.filter(a =>
+        a.nama_pos.toLowerCase().includes(q) ||
+        a.nama_outlet.toLowerCase().includes(q) ||
+        a.nama_pemilik.toLowerCase().includes(q)
+      );
+    }
+    aliases.sort((a, b) => a.nama_pos.localeCompare(b.nama_pos));
+
     return { data: { aliases, rows: aliases } };
+  }
+
+  // 4e. APPROVALS /api/approvals and /api/approvals/:id/resolve
+  if (pathname.startsWith('/api/approvals/') && pathname.endsWith('/resolve') && method === 'POST') {
+    const rawId = pathname.replace('/api/approvals/', '').replace('/resolve', '');
+    const approvalId = decodeURIComponent(rawId);
+    const keputusan = body.keputusan; // 'approve' | 'reject' | 'ignore'
+    const targetOutletId = body.outletId;
+
+    const apprRef = doc(db, COLLECTIONS.APPROVALS, approvalId);
+    const snap = await getDoc(apprRef);
+    if (!snap.exists()) {
+      return { status: 404, data: { error: 'Approval tidak ditemukan' } };
+    }
+    const apprData = snap.data();
+
+    const statusVal = keputusan === 'approve' ? 'disetujui' : keputusan === 'reject' ? 'ditolak' : 'diabaikan';
+    await updateDoc(apprRef, {
+      status: statusVal,
+      updated_at: new Date().toISOString(),
+    });
+
+    // Jika approve dan ada outlet_id, petakan kode/nama
+    if (keputusan === 'approve' && targetOutletId && apprData.payload) {
+      const payload = typeof apprData.payload === 'string' ? JSON.parse(apprData.payload) : apprData.payload;
+      const namaPos = payload.nama || payload.nama_pos;
+      if (namaPos) {
+        const aliasId = `alias_${String(namaPos).toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+        await setDoc(doc(db, COLLECTIONS.POS_ALIASES, aliasId), {
+          id: aliasId,
+          nama_pos: namaPos,
+          outlet_id: targetOutletId,
+          created_at: new Date().toISOString(),
+        }, { merge: true });
+      }
+    }
+
+    return { data: { success: true, message: `Approval ${approvalId} berhasil diselesaikan` } };
+  }
+
+  if (pathname === '/api/approvals') {
+    const statusFilter = searchParams.get('status') || 'menunggu';
+    const jenisFilter = searchParams.get('jenis') || '';
+    const q = (searchParams.get('q') || '').toLowerCase().trim();
+    const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
+    const limit = Math.max(1, parseInt(searchParams.get('limit') || '20', 10));
+
+    const [apprSnap, batchSnap] = await Promise.all([
+      getDocs(collection(db, COLLECTIONS.APPROVALS)),
+      getDocs(collection(db, COLLECTIONS.IMPORT_BATCHES)),
+    ]);
+
+    const batchMap = new Map<string, any>();
+    batchSnap.forEach(d => batchMap.set(String(d.data().id || d.id), d.data()));
+
+    let all: any[] = [];
+    apprSnap.forEach(d => {
+      const a = d.data();
+      const bInfo = a.batch_id ? batchMap.get(String(a.batch_id)) : null;
+      all.push({
+        id: d.id,
+        jenis: a.jenis || 'anomali_master',
+        payload: typeof a.payload === 'object' ? JSON.stringify(a.payload) : (a.payload || '{}'),
+        status: a.status || 'menunggu',
+        created_at: a.created_at || new Date().toISOString(),
+        filename: bInfo?.filename || 'File Import',
+        bulan: bInfo?.bulan || '2026-09',
+      });
+    });
+
+    // Counts per jenis untuk status 'menunggu'
+    const countsMap = new Map<string, number>();
+    all.filter(a => a.status === 'menunggu').forEach(a => {
+      countsMap.set(a.jenis, (countsMap.get(a.jenis) || 0) + 1);
+    });
+    const counts = Array.from(countsMap.entries()).map(([jenis, jumlah]) => ({ jenis, jumlah }));
+
+    // Filter
+    if (statusFilter !== 'all') {
+      all = all.filter(a => a.status === statusFilter);
+    }
+    if (jenisFilter) {
+      all = all.filter(a => a.jenis === jenisFilter);
+    }
+    if (q) {
+      all = all.filter(a =>
+        a.payload.toLowerCase().includes(q) ||
+        a.jenis.toLowerCase().includes(q) ||
+        (a.filename && a.filename.toLowerCase().includes(q))
+      );
+    }
+
+    all.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+    const total = all.length;
+    const start = (page - 1) * limit;
+    const approvals = all.slice(start, start + limit);
+
+    return {
+      data: {
+        approvals,
+        counts,
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit) || 1,
+      },
+    };
   }
 
   // 5. COUPONS LOOKUP /api/coupons/lookup
@@ -591,13 +955,20 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
     const endDate = searchParams.get('end_date') || '';
 
     // Ambil data koleksi secara paralel
-    const [invSnap, outSnap, idSnap, batchSnap, coupSnap] = await Promise.all([
+    const [invSnap, outSnap, idSnap, batchSnap, apprSnap, coupSnap] = await Promise.all([
       getDocs(collection(db, COLLECTIONS.INVOICES)),
       getDocs(collection(db, COLLECTIONS.OUTLETS)),
       getDocs(collection(db, COLLECTIONS.IDENTITIES)),
       getDocs(collection(db, COLLECTIONS.IMPORT_BATCHES)),
+      getDocs(collection(db, COLLECTIONS.APPROVALS)),
       getCountFromServer(collection(db, COLLECTIONS.COUPONS)).catch(() => ({ data: () => ({ count: 0 }) })),
     ]);
+
+    let pendingApprovalsCount = 0;
+    apprSnap.forEach(d => {
+      const a = d.data();
+      if (!a.status || a.status === 'menunggu') pendingApprovalsCount++;
+    });
 
     const outletMap = new Map<string, any>();
     outSnap.forEach(d => outletMap.set(d.id, d.data()));
@@ -791,7 +1162,7 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
           totalOutlets: outSnap.size,
           totalAliases: 20,
           totalRawInvoices: allInvoices.length,
-          pendingApprovals: 0,
+          pendingApprovals: pendingApprovalsCount,
           belumPetakan: unmappedCount,
           lastImport: lastImport ? {
             filename: lastImport.filename || '',
