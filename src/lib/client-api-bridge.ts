@@ -195,6 +195,7 @@ interface StatementBuildingBlocks {
   invoices: any[];
   penalties: any[];
   coupons?: any[];
+  wastePurchases?: any[];
   bulan: string;
 }
 
@@ -204,6 +205,7 @@ function buildStatementDataFromMemory({
   invoices,
   penalties,
   coupons = [],
+  wastePurchases = [],
   bulan,
 }: StatementBuildingBlocks) {
   const identityId = identity.id;
@@ -254,6 +256,44 @@ function buildStatementDataFromMemory({
   const memberInvoices = invoices.filter(inv =>
     inv.identity_id === identityId || (inv.outlet_id && outletIds.has(inv.outlet_id))
   );
+
+  // 3b. Filter waste purchases (pembelian limbah UCO) milik member ini
+  const memberWaste = wastePurchases.filter(w =>
+    w.identity_id === identityId || (w.outlet_id && outletIds.has(w.outlet_id))
+  );
+
+  const monthWaste = memberWaste.filter(w => w.tanggal >= bulanStart && w.tanggal <= bulanEnd);
+  const wasteBulanKg = monthWaste.reduce((acc, w) => acc + (Number(w.berat_kg) || 0), 0);
+  const wasteBulanRupiah = monthWaste.reduce((acc, w) => acc + (Number(w.total_rupiah) || 0), 0);
+  const grossWasteBulanPoin = monthWaste.reduce((acc, w) => acc + (Number(w.poin) || 0), 0);
+  const wasteBulanPoin = isMonthSuspended ? 0 : grossWasteBulanPoin;
+  const devaluasiWasteBulanPoin = isMonthSuspended ? grossWasteBulanPoin : 0;
+
+  const cumWaste = memberWaste.filter(w => w.tanggal >= '2026-09-01' && w.tanggal <= bulanEnd);
+  const wasteKumulatifKg = cumWaste.reduce((acc, w) => acc + (Number(w.berat_kg) || 0), 0);
+  const wasteKumulatifRupiah = cumWaste.reduce((acc, w) => acc + (Number(w.total_rupiah) || 0), 0);
+  const grossWasteCumPoin = cumWaste.reduce((acc, w) => acc + (Number(w.poin) || 0), 0);
+  const wasteKumulatifPoin = isMonthSuspended ? 0 : grossWasteCumPoin;
+
+  // Rincian outlet waste purchasing bulan ini
+  const outletsWasteMap = new Map<string, { outlet_id: string; nama_outlet: string; berat_kg: number; total_rupiah: number; poin: number; is_void?: boolean }>();
+  for (const w of monthWaste) {
+    const oId = w.outlet_id || 'unknown';
+    const existing = outletsWasteMap.get(oId) || {
+      outlet_id: oId,
+      nama_outlet: memberOutlets.find(o => o.id === oId)?.nama_outlet || w.nama_outlet || oId,
+      berat_kg: 0,
+      total_rupiah: 0,
+      poin: 0,
+      is_void: isMonthSuspended ? true : false,
+    };
+    existing.berat_kg += Number(w.berat_kg) || 0;
+    existing.total_rupiah += Number(w.total_rupiah) || 0;
+    existing.poin += Number(w.poin) || 0;
+    if (isMonthSuspended) existing.is_void = true;
+    outletsWasteMap.set(oId, existing);
+  }
+  const outlets_waste = Array.from(outletsWasteMap.values());
 
   const nilaiKupon = 150000;
 
@@ -346,10 +386,23 @@ function buildStatementDataFromMemory({
     }
   }
 
-  const totalDevaluasiKumulatifPoin = Math.max(0, grossCumPoin - kumulatifPoin);
-  const totalDevaluasiKumulatifKupon = Math.max(0, grossCumKupon - kumulatifKupon);
-  const sebelumnyaKumulatifPoin = Math.max(grossCumPoin, kumulatifPoin);
-  const sebelumnyaKumulatifKupon = Math.max(grossCumKupon, kumulatifKupon);
+  const netKumulatifPoin = kumulatifPoin + wasteKumulatifPoin;
+  const netKumulatifKupon = kumulatifKupon;
+
+  // Devaluasi & Void gabungan (Belanja + Waste Purchasing)
+  const grossBulanBelanjaKupon = outletSummaries.reduce((acc, o) => acc + (o.kupon_seharusnya || 0), 0);
+  const grossBulanPoin = (bulanTotal.poin + (bulanTotal.devaluasi_poin || 0)) + grossWasteBulanPoin;
+  const totalDevaluasiBulanPoin = isMonthSuspended ? grossBulanPoin : ((bulanTotal.devaluasi_poin || 0) + devaluasiWasteBulanPoin);
+  const totalDevaluasiBulanKupon = isMonthSuspended ? grossBulanBelanjaKupon : (bulanTotal.devaluasi_kupon || 0);
+
+  const sebelumnyaKumulatifPoin = Math.max(
+    grossCumPoin + grossWasteCumPoin,
+    netKumulatifPoin + (isMonthSuspended ? grossWasteCumPoin : 0)
+  );
+  const sebelumnyaKumulatifKupon = Math.max(grossCumKupon, netKumulatifKupon);
+
+  const totalDevaluasiKumulatifPoin = Math.max(0, sebelumnyaKumulatifPoin - netKumulatifPoin);
+  const totalDevaluasiKumulatifKupon = Math.max(0, sebelumnyaKumulatifKupon - netKumulatifKupon);
   const hasDevaluasi = isMonthSuspended || totalDevaluasiKumulatifPoin > 0 || totalDevaluasiKumulatifKupon > 0;
 
   // 6. Customer Savings
@@ -388,22 +441,39 @@ function buildStatementDataFromMemory({
       }
     }
 
-    const mIsSuspended = (m === bulan && isMonthSuspended) || (mTotalTransaksi > 0 && mActualPoin === 0 && mInvs.some(i => i.is_excluded === 1));
+    const mWaste = memberWaste.filter(w => w.tanggal >= mStart && w.tanggal <= mEnd);
+    let mWasteRupiah = 0;
+    let mWasteKg = 0;
+    let rawMonthWastePoin = 0;
+    for (const w of mWaste) {
+      mWasteRupiah += Number(w.total_rupiah) || 0;
+      mWasteKg += Number(w.berat_kg) || 0;
+      rawMonthWastePoin += Number(w.poin) || 0;
+    }
+
+    const mDevaluasiBelanjaPoin = Math.max(0, mGrossPoin - mActualPoin);
+    const mDevaluasiKupon = Math.max(0, mGrossKupon - mActualKupon);
+    const mIsSuspended = (m === bulan && isMonthSuspended) || ((mDevaluasiBelanjaPoin > 0 || mDevaluasiKupon > 0) && (mActualPoin === 0 && mTotalTransaksi > 0));
+
+    const monthWastePoin = mIsSuspended ? 0 : rawMonthWastePoin;
+    const mDevaluasiWastePoin = mIsSuspended ? rawMonthWastePoin : 0;
+    const mDevaluasiPoinVal = mIsSuspended ? (mGrossPoin + rawMonthWastePoin) : (mDevaluasiBelanjaPoin + mDevaluasiWastePoin);
+    const mDevaluasiKuponVal = mIsSuspended ? mGrossKupon : mDevaluasiKupon;
 
     return {
       no: idx + 1,
       bulan: m,
       label: formatStatementBulanLabel(m),
       total_transaksi: mTotalTransaksi,
-      poin: mIsSuspended ? 0 : mActualPoin,
+      poin: mIsSuspended ? 0 : (mActualPoin + monthWastePoin),
       bonus_poin: 0,
       kupon: mIsSuspended ? 0 : mActualKupon,
       is_suspended: mIsSuspended,
-      devaluasi_poin: mIsSuspended ? mGrossPoin : Math.max(0, mGrossPoin - mActualPoin),
-      devaluasi_kupon: mIsSuspended ? mGrossKupon : Math.max(0, mGrossKupon - mActualKupon),
-      waste_rupiah: 0,
-      waste_kg: 0,
-      waste_poin: 0,
+      devaluasi_poin: mDevaluasiPoinVal,
+      devaluasi_kupon: mDevaluasiKuponVal,
+      waste_rupiah: mWasteRupiah,
+      waste_kg: mWasteKg,
+      waste_poin: monthWastePoin,
     };
   });
 
@@ -454,14 +524,14 @@ function buildStatementDataFromMemory({
     bulan_label: formatBulanLabel(bulan),
     bulan_transaksi: bulanTotal.transaksi,
     bulan_belanja_poin: isMonthSuspended ? 0 : bulanTotal.poin,
-    bulan_poin: isMonthSuspended ? 0 : bulanTotal.poin,
-    gross_bulan_poin: bulanTotal.grossPoin,
-    gross_waste_bulan_poin: 0,
-    devaluasi_waste_bulan_poin: 0,
+    bulan_poin: isMonthSuspended ? 0 : (bulanTotal.poin + wasteBulanPoin),
+    gross_bulan_poin: grossBulanPoin,
+    gross_waste_bulan_poin: grossWasteBulanPoin,
+    devaluasi_waste_bulan_poin: devaluasiWasteBulanPoin,
     bulan_bonus_poin: 0,
     bulan_kupon: isMonthSuspended ? 0 : bulanTotal.kupon,
-    kumulatif_poin: kumulatifPoin,
-    kumulatif_kupon: kumulatifKupon,
+    kumulatif_poin: netKumulatifPoin,
+    kumulatif_kupon: netKumulatifKupon,
     transaksi_terakhir: transaksiTerakhir,
     outlets: outletSummaries,
     histori,
@@ -472,19 +542,19 @@ function buildStatementDataFromMemory({
     suspend_reason: isMonthSuspended ? activeReason : null,
     suspend_note: suspendNote,
     has_devaluasi: hasDevaluasi,
-    devaluasi_bulan_poin: bulanTotal.devaluasi_poin,
-    devaluasi_bulan_kupon: bulanTotal.devaluasi_kupon,
+    devaluasi_bulan_poin: totalDevaluasiBulanPoin,
+    devaluasi_bulan_kupon: totalDevaluasiBulanKupon,
     sebelumnya_kumulatif_poin: sebelumnyaKumulatifPoin,
     sebelumnya_kumulatif_kupon: sebelumnyaKumulatifKupon,
     total_devaluasi_kumulatif_poin: totalDevaluasiKumulatifPoin,
     total_devaluasi_kumulatif_kupon: totalDevaluasiKumulatifKupon,
-    waste_bulan_kg: 0,
-    waste_bulan_rupiah: 0,
-    waste_bulan_poin: 0,
-    waste_kumulatif_kg: 0,
-    waste_kumulatif_rupiah: 0,
-    waste_kumulatif_poin: 0,
-    outlets_waste: [],
+    waste_bulan_kg: wasteBulanKg,
+    waste_bulan_rupiah: wasteBulanRupiah,
+    waste_bulan_poin: wasteBulanPoin,
+    waste_kumulatif_kg: wasteKumulatifKg,
+    waste_kumulatif_rupiah: wasteKumulatifRupiah,
+    waste_kumulatif_poin: wasteKumulatifPoin,
+    outlets_waste: outlets_waste,
     hemat_trx_count: monthInvoicesCount,
     saving_parkir_per_trx: savingParkirPerTrx,
     saving_kurir_per_trx: savingKurirPerTrx,
@@ -503,11 +573,12 @@ async function buildFirestoreStatementData(identityId: string, bulan: string) {
   }
   const identity = idSnap.data();
 
-  const [outSnap, invSnap, penSnap, coupSnap] = await Promise.all([
+  const [outSnap, invSnap, penSnap, coupSnap, wasteSnap] = await Promise.all([
     getDocs(query(collection(db, COLLECTIONS.OUTLETS), where('identity_id', '==', identityId))),
     getDocs(collection(db, COLLECTIONS.INVOICES)),
     getDocs(query(collection(db, COLLECTIONS.MEMBER_PENALTIES), where('identity_id', '==', identityId))),
     getDocs(query(collection(db, COLLECTIONS.COUPONS), where('identity_id', '==', identityId))),
+    getDocs(collection(db, COLLECTIONS.WASTE_PURCHASES)),
   ]);
 
   const outlets: any[] = [];
@@ -522,12 +593,16 @@ async function buildFirestoreStatementData(identityId: string, bulan: string) {
   const coupons: any[] = [];
   coupSnap.forEach(d => coupons.push(d.data()));
 
+  const wastePurchases: any[] = [];
+  wasteSnap.forEach(d => wastePurchases.push(d.data()));
+
   return buildStatementDataFromMemory({
     identity,
     outlets,
     invoices,
     penalties,
     coupons,
+    wastePurchases,
     bulan,
   });
 }
@@ -3455,13 +3530,14 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
 
   if (pathname === '/api/statements/batch' && method === 'GET') {
     const bulan = searchParams.get('bulan') || '2026-09';
-    const [idSnap, outSnap, invSnap, penSnap, coupSnap, stmtSnap] = await Promise.all([
+    const [idSnap, outSnap, invSnap, penSnap, coupSnap, stmtSnap, wasteSnap] = await Promise.all([
       getDocs(collection(db, COLLECTIONS.IDENTITIES)),
       getDocs(collection(db, COLLECTIONS.OUTLETS)),
       getDocs(collection(db, COLLECTIONS.INVOICES)),
       getDocs(collection(db, COLLECTIONS.MEMBER_PENALTIES)),
       getDocs(collection(db, COLLECTIONS.COUPONS)),
       getDocs(collection(db, COLLECTIONS.STATEMENTS)),
+      getDocs(collection(db, COLLECTIONS.WASTE_PURCHASES)),
     ]);
 
     const identities: any[] = [];
@@ -3483,6 +3559,9 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
     const coupons: any[] = [];
     coupSnap.forEach(d => coupons.push(d.data()));
 
+    const wastePurchases: any[] = [];
+    wasteSnap.forEach(d => wastePurchases.push(d.data()));
+
     const stmtMap = new Map<string, any>();
     stmtSnap.forEach(d => stmtMap.set(d.id, d.data()));
 
@@ -3495,10 +3574,11 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
           invoices,
           penalties,
           coupons,
+          wastePurchases,
           bulan,
         });
 
-        if (data.bulan_transaksi === 0 && data.kumulatif_poin === 0) {
+        if (data.bulan_transaksi === 0 && data.kumulatif_poin === 0 && (data.waste_kumulatif_poin || 0) === 0) {
           continue;
         }
 
@@ -3613,13 +3693,14 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
     const endDate = searchParams.get('end_date') || '';
 
     // Ambil data koleksi secara paralel
-    const [invSnap, outSnap, idSnap, batchSnap, apprSnap, coupSnap] = await Promise.all([
+    const [invSnap, outSnap, idSnap, batchSnap, apprSnap, coupSnap, wasteSnap] = await Promise.all([
       getDocs(collection(db, COLLECTIONS.INVOICES)),
       getDocs(collection(db, COLLECTIONS.OUTLETS)),
       getDocs(collection(db, COLLECTIONS.IDENTITIES)),
       getDocs(collection(db, COLLECTIONS.IMPORT_BATCHES)),
       getDocs(collection(db, COLLECTIONS.APPROVALS)),
       getCountFromServer(collection(db, COLLECTIONS.COUPONS)).catch(() => ({ data: () => ({ count: 0 }) })),
+      getDocs(collection(db, COLLECTIONS.WASTE_PURCHASES)),
     ]);
 
     let pendingApprovalsCount = 0;
@@ -3787,6 +3868,34 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
       lastImport = batches[0];
     }
 
+    // Agregasi Waste Purchasing (Pembelian Limbah UCO)
+    let total_waste_trx = 0;
+    let total_waste_kg = 0.0;
+    let total_waste_rupiah = 0;
+    let total_waste_poin = 0;
+
+    wasteSnap.forEach(d => {
+      const w = d.data();
+      const tgl = String(w.tanggal || '');
+      const bln = tgl.slice(0, 7);
+
+      let matches = true;
+      if (periodType === 'monthly' && month) {
+        matches = bln === month || tgl.startsWith(month);
+      } else if (periodType === 'yearly' && year) {
+        matches = bln.startsWith(year) || tgl.startsWith(year);
+      } else if (periodType === 'custom' && activeStartDate && activeEndDate) {
+        matches = tgl >= activeStartDate && tgl <= activeEndDate;
+      }
+
+      if (matches) {
+        total_waste_trx++;
+        total_waste_kg += Number(w.berat_kg) || 0;
+        total_waste_rupiah += Number(w.total_rupiah) || 0;
+        total_waste_poin += Number(w.poin) || 0;
+      }
+    });
+
     const coupCount = (coupSnap as any)?.data ? (coupSnap as any).data().count : 0;
 
     return {
@@ -3808,10 +3917,10 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
           total_invoices: allInvoices.length,
         },
         wasteTotals: {
-          total_waste_trx: 0,
-          total_waste_kg: 0.0,
-          total_waste_rupiah: 0,
-          total_waste_poin: 0,
+          total_waste_trx,
+          total_waste_kg,
+          total_waste_rupiah,
+          total_waste_poin,
         },
         byLiniBisnis: [
           byLiniBisnisMap.retail,
