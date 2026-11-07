@@ -687,11 +687,27 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
   // 2. SETTINGS /api/settings
   if (pathname === '/api/settings') {
     if (method === 'GET') {
-      const rulesSnap = await getDocs(collection(db, COLLECTIONS.RULES_CONFIG));
+      const [rulesSnap, backSnap, auditSnap, batchSnap] = await Promise.all([
+        getDocs(collection(db, COLLECTIONS.RULES_CONFIG)),
+        getDocs(collection(db, COLLECTIONS.BACKUPS)).catch(() => ({ forEach: () => {}, size: 0 } as any)),
+        getCountFromServer(collection(db, COLLECTIONS.AUDIT_LOG)).catch(() => ({ data: () => ({ count: 0 }) } as any)),
+        getCountFromServer(collection(db, COLLECTIONS.IMPORT_BATCHES)).catch(() => ({ data: () => ({ count: 0 }) } as any)),
+      ]);
+
       const rules: any[] = [];
       rulesSnap.forEach(d => {
         rules.push({ kunci: d.id, ...d.data() });
       });
+
+      const backups: any[] = [];
+      (backSnap as any).forEach((d: any) => {
+        backups.push({ id: d.id, ...d.data() });
+      });
+      backups.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+
+      const latestBackup = backups[0] || null;
+      const auditCount = (auditSnap as any)?.data ? (auditSnap as any).data().count : 0;
+      const batchCount = (batchSnap as any)?.data ? (batchSnap as any).data().count : 0;
 
       return {
         data: {
@@ -699,8 +715,13 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
           stats: {
             dbEngine: 'Firebase Firestore (Web Client SPA)',
             dbProject: 'oriental-crm-221e3',
+            dbPath: 'cloud://oriental-crm-221e3',
+            auditCount,
+            batchCount,
+            latestBackup,
+            totalBackups: backups.length,
           },
-          backups: [],
+          backups,
         },
       };
     } else if (method === 'POST') {
@@ -959,6 +980,134 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
             deactivatedOutlets,
             deactivatedIdentities,
           },
+        },
+      };
+    }
+  }
+
+  // 2c. MAINTENANCE BACKUP /api/maintenance/backup
+  if (pathname === '/api/maintenance/backup') {
+    if (method === 'POST' || method === 'GET') {
+      const action = searchParams.get('action');
+
+      if (action === 'list' && method === 'GET') {
+        const backSnap = await getDocs(collection(db, COLLECTIONS.BACKUPS));
+        const backups: any[] = [];
+        backSnap.forEach(d => backups.push(d.data()));
+        backups.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+        return { data: { success: true, total: backups.length, backups } };
+      }
+
+      // Ambil snapshot 12 koleksi lengkap
+      const [
+        idSnap, outSnap, invSnap, coupSnap,
+        wasteSnap, apprSnap, rulesSnap, penSnap,
+        stmtSnap, aliasSnap, batchSnap, auditSnap
+      ] = await Promise.all([
+        getDocs(collection(db, COLLECTIONS.IDENTITIES)),
+        getDocs(collection(db, COLLECTIONS.OUTLETS)),
+        getDocs(collection(db, COLLECTIONS.INVOICES)),
+        getDocs(collection(db, COLLECTIONS.COUPONS)),
+        getDocs(collection(db, COLLECTIONS.WASTE_PURCHASES)),
+        getDocs(collection(db, COLLECTIONS.APPROVALS)),
+        getDocs(collection(db, COLLECTIONS.RULES_CONFIG)),
+        getDocs(collection(db, COLLECTIONS.MEMBER_PENALTIES)),
+        getDocs(collection(db, COLLECTIONS.STATEMENTS)),
+        getDocs(collection(db, COLLECTIONS.POS_ALIASES)),
+        getDocs(collection(db, COLLECTIONS.IMPORT_BATCHES)),
+        getDocs(collection(db, COLLECTIONS.AUDIT_LOG)),
+      ]);
+
+      const extract = (snap: any) => {
+        const arr: any[] = [];
+        snap.forEach((d: any) => arr.push({ _id: d.id, ...d.data() }));
+        return arr;
+      };
+
+      const dumpData = {
+        identities: extract(idSnap),
+        outlets: extract(outSnap),
+        invoices: extract(invSnap),
+        coupons: extract(coupSnap),
+        waste_purchases: extract(wasteSnap),
+        approvals: extract(apprSnap),
+        rules_config: extract(rulesSnap),
+        member_penalties: extract(penSnap),
+        statements: extract(stmtSnap),
+        pos_aliases: extract(aliasSnap),
+        import_batches: extract(batchSnap),
+        audit_log: extract(auditSnap),
+      };
+
+      const totalRecords = Object.values(dumpData).reduce((sum, arr) => sum + arr.length, 0);
+      const now = new Date();
+      const pad = (n: number) => String(n).padStart(2, '0');
+      const dateStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+      const filename = `oriental_crm_backup_${dateStr}.json`;
+
+      const jsonString = JSON.stringify({
+        app: 'Oriental CRM & Cetak Statement',
+        version: '1.0.0',
+        exported_at: now.toISOString(),
+        database: 'Google Cloud Firebase Firestore (oriental-crm-221e3)',
+        totalRecords,
+        collectionsCount: 12,
+        data: dumpData,
+      }, null, 2);
+
+      const sizeBytes = new Blob([jsonString]).size;
+      const sizeFormatted = sizeBytes >= 1048576
+        ? `${(sizeBytes / 1048576).toFixed(2)} MB`
+        : `${(sizeBytes / 1024).toFixed(1)} KB`;
+
+      // Simpan metadata ke Firestore backups
+      const backupRef = doc(collection(db, COLLECTIONS.BACKUPS));
+      const backupMeta = {
+        id: backupRef.id,
+        filename,
+        sizeBytes,
+        sizeFormatted,
+        createdAt: now.toISOString(),
+        createdBy: getActiveUser()?.username || 'admin',
+        totalRecords,
+        location: 'cloud' as const,
+        path: `firestore://oriental-crm-221e3/${backupRef.id}`,
+      };
+      await setDoc(backupRef, backupMeta);
+
+      // Audit log
+      try {
+        const auditRef = doc(collection(db, COLLECTIONS.AUDIT_LOG));
+        await setDoc(auditRef, {
+          id: auditRef.id,
+          tipe: 'backup_database',
+          aksi: 'create_backup',
+          user_id: getActiveUser()?.username || 'admin',
+          keterangan: `Backup database cloud dibuat: ${filename} (${sizeFormatted}, ${totalRecords} records)`,
+          created_at: now.toISOString(),
+        });
+      } catch {}
+
+      // Ambil daftar backup terbaru
+      const backSnap = await getDocs(collection(db, COLLECTIONS.BACKUPS));
+      const backups: any[] = [];
+      backSnap.forEach(d => backups.push(d.data()));
+      backups.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+
+      return {
+        data: {
+          success: true,
+          message: `Database berhasil dicadangkan! File: ${filename} (${sizeFormatted}).`,
+          result: {
+            filename,
+            savedLocations: ['Google Cloud Firebase Firestore (oriental-crm-221e3)'],
+            totalRecords,
+            sizeFormatted,
+            sizeBytes,
+            createdAt: backupMeta.createdAt,
+            jsonData: jsonString,
+          },
+          backups,
         },
       };
     }

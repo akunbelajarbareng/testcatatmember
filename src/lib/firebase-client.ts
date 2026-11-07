@@ -32,6 +32,7 @@ export const COLLECTIONS = {
   COUPONS: 'coupons',
   MEMBER_PENALTIES: 'member_penalties',
   WASTE_PURCHASES: 'waste_purchases',
+  BACKUPS: 'backups',
   APP_USERS: 'app_users',
   APP_SESSIONS: 'app_sessions',
 } as const;

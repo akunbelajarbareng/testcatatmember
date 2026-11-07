@@ -64,6 +64,18 @@ export default function SettingsPage() {
     }
   };
 
+  const triggerBrowserDownload = (jsonText: string, filename: string) => {
+    const blob = new Blob([jsonText], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   const handleManualLocalBackup = async () => {
     setBackupLoading(true);
     setBackupMsg(null);
@@ -73,14 +85,40 @@ export default function SettingsPage() {
       if (res.ok) {
         setBackupMsg({
           type: "success",
-          text: `Berhasil mencadangkan ke folder lokal! File: ${json.result?.filename} (${json.result?.savedLocations?.length || 2} direktori tersimpan).`,
+          text: `Berhasil mencadangkan database! File: ${json.result?.filename} (${json.result?.sizeFormatted || ""}, ${json.result?.totalRecords || 0} data) tersimpan di Cloud & diunduh ke komputer Anda.`,
         });
+        if (json.result?.jsonData) {
+          triggerBrowserDownload(json.result.jsonData, json.result.filename);
+        }
         await loadSettings();
       } else {
         setBackupMsg({ type: "error", text: json.error || "Gagal mencadangkan database." });
       }
     } catch {
       setBackupMsg({ type: "error", text: "Terjadi kesalahan jaringan saat mencadangkan database." });
+    } finally {
+      setBackupLoading(false);
+    }
+  };
+
+  const handleDownloadSnapshot = async (filename?: string) => {
+    setBackupLoading(true);
+    setBackupMsg(null);
+    try {
+      const res = await fetch("/api/maintenance/backup");
+      const json = await res.json();
+      if (res.ok && json.result?.jsonData) {
+        const targetFilename = filename || json.result.filename;
+        triggerBrowserDownload(json.result.jsonData, targetFilename);
+        setBackupMsg({
+          type: "success",
+          text: `File cadangan snapshot ${targetFilename} berhasil diunduh.`,
+        });
+      } else {
+        alert("Gagal mengunduh file cadangan snapshot");
+      }
+    } catch {
+      alert("Gagal mengunduh file cadangan snapshot");
     } finally {
       setBackupLoading(false);
     }
@@ -401,15 +439,15 @@ export default function SettingsPage() {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
           <div>
             <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-              <Database size={18} className="text-blue-600" /> Database &amp; Auto-Backup Lokal
+              <Database size={18} className="text-blue-600" /> Database &amp; Cloud Backup (Firebase Firestore)
             </h2>
             <p className="text-xs text-slate-500 mt-0.5">
-              Status penyimpanan SQLite, penjadwalan pencadangan otomatis harian, dan riwayat arsip lokal.
+              Penyimpanan cloud Google Firebase Firestore, snapshot cadangan data lengkap (JSON Dump), dan riwayat arsip.
             </p>
           </div>
           <span className="badge badge-success text-xs py-1 px-2.5 flex items-center gap-1.5 shrink-0 self-start sm:self-auto">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            Auto-Backup Aktif (23:00 WIB)
+            Cloud Firestore Aktif
           </span>
         </div>
 
@@ -417,7 +455,7 @@ export default function SettingsPage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs mb-4">
           <div className="p-3 bg-slate-50 rounded border border-slate-200">
             <span className="text-slate-500 block text-[11px]">Database Aktif:</span>
-            <span className="font-mono font-bold text-slate-800 text-xs break-all">{stats?.dbPath || "data/oriental_crm.db"}</span>
+            <span className="font-mono font-bold text-slate-800 text-xs break-all">{stats?.dbPath || "oriental-crm-221e3 (Firestore)"}</span>
           </div>
           <div className="p-3 bg-slate-50 rounded border border-slate-200">
             <span className="text-slate-500 block text-[11px]">Pencadangan Terakhir:</span>
@@ -439,7 +477,7 @@ export default function SettingsPage() {
           <div className="p-3 bg-slate-50 rounded border border-slate-200">
             <span className="text-slate-500 block text-[11px]">Total Arsip Cadangan:</span>
             <span className="text-base font-bold text-slate-900">{stats?.totalBackups ?? backups.length} File</span>
-            <span className="text-[10px] text-slate-500 block">Retensi otomatis 30 hari</span>
+            <span className="text-[10px] text-slate-500 block">Tersimpan di Cloud</span>
           </div>
           <div className="p-3 bg-slate-50 rounded border border-slate-200">
             <span className="text-slate-500 block text-[11px]">Total Audit Log:</span>
@@ -448,22 +486,22 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        {/* Folder Lokasi Auto-Backup */}
+        {/* Info Lokasi Cadangan Cloud & Snapshot */}
         <div className="p-3.5 bg-blue-50/70 rounded-lg border border-blue-200/80 mb-4 text-xs">
           <div className="font-semibold text-blue-950 flex items-center gap-1.5 mb-1.5">
             <FolderCheck size={15} className="text-blue-600" />
-            <span>Direktori Penyimpanan Otomatis (Multi-Lokasi Lokal):</span>
+            <span>Penyimpanan Cadangan Cloud &amp; Format Export JSON:</span>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
             <div className="bg-white p-2.5 rounded border border-blue-200">
-              <span className="font-bold text-slate-700 block">1. Folder Sistem Windows (Anti-Terhapus):</span>
-              <code className="text-blue-700 font-mono break-all">C:\Oriental_CRM_Backups\</code>
-              <p className="text-[10px] text-slate-500 mt-1">Disinkronkan dengan Windows Task Scheduler setiap malam.</p>
+              <span className="font-bold text-slate-700 block">1. Cloud Firestore Storage (Aman &amp; Terdistribusi):</span>
+              <code className="text-blue-700 font-mono break-all">koleksi 'backups' di oriental-crm-221e3</code>
+              <p className="text-[10px] text-slate-500 mt-1">Metadata riwayat pencadangan tersimpan aman di cloud Google Firebase.</p>
             </div>
             <div className="bg-white p-2.5 rounded border border-blue-200">
-              <span className="font-bold text-slate-700 block">2. Folder Proyek Internal:</span>
-              <code className="text-blue-700 font-mono break-all">&lt;proyek&gt;\data\backups\</code>
-              <p className="text-[10px] text-slate-500 mt-1">Arsip lokal yang mudah diakses langsung dari folder aplikasi.</p>
+              <span className="font-bold text-slate-700 block">2. Unduhan Mandiri File Snapshot JSON:</span>
+              <code className="text-blue-700 font-mono break-all">oriental_crm_backup_*.json</code>
+              <p className="text-[10px] text-slate-500 mt-1">Snapshot utuh seluruh 12 koleksi (invoices, outlets, coupons, waste, approvals, dll.) dapat diunduh langsung ke komputer Anda.</p>
             </div>
           </div>
         </div>
@@ -480,11 +518,11 @@ export default function SettingsPage() {
         <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-slate-200">
           <div>
             <div className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-              <span>Operasi Cadangan Manual &amp; Unduh</span>
-              <span className="badge badge-neutral text-[10px] py-0 px-1.5">Non-Blocking WAL</span>
+              <span>Operasi Cadangan Manual &amp; Unduh Snapshot</span>
+              <span className="badge badge-neutral text-[10px] py-0 px-1.5">JSON Dump</span>
             </div>
             <p className="text-[11px] text-slate-500 mt-0.5">
-              Cadangkan seketika ke kedua folder lokal atau unduh file snapshot utuh ke komputer.
+              Buat snapshot data lengkap seketika ke cloud dan unduh file cadangan ke komputer Anda.
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
@@ -495,23 +533,24 @@ export default function SettingsPage() {
               className="btn btn-primary btn-sm flex items-center justify-center gap-1.5 font-medium disabled:opacity-60"
             >
               <RefreshCw size={13} className={backupLoading ? "animate-spin" : ""} />
-              {backupLoading ? "Mencadangkan..." : "Cadangkan ke Folder Lokal Sekarang"}
+              {backupLoading ? "Mencadangkan..." : "Cadangkan & Unduh Snapshot Sekarang"}
             </button>
-            <a
-              href="/api/maintenance/backup"
-              download
-              className="btn btn-outline btn-sm flex items-center justify-center gap-1.5 text-blue-700 border-blue-300 hover:bg-blue-50 font-medium"
+            <button
+              type="button"
+              onClick={() => handleDownloadSnapshot()}
+              disabled={backupLoading}
+              className="btn btn-outline btn-sm flex items-center justify-center gap-1.5 text-blue-700 border-blue-300 hover:bg-blue-50 font-medium disabled:opacity-60"
             >
-              <Download size={13} /> Unduh (.db)
-            </a>
+              <Download size={13} /> Unduh Snapshot (.json)
+            </button>
           </div>
         </div>
 
-        {/* Riwayat 5 Cadangan Lokal Terakhir */}
+        {/* Riwayat 5 Cadangan Terakhir */}
         {backups.length > 0 && (
           <div className="mt-4 pt-3 border-t border-slate-100">
             <span className="text-[11px] font-bold text-slate-700 block mb-2">
-              Daftar 5 Arsip Cadangan Lokal Terbaru:
+              Daftar 5 Arsip Cadangan Cloud Terbaru:
             </span>
             <div className="overflow-x-auto border border-slate-200 rounded">
               <table className="w-full text-left text-[11px] divide-y divide-slate-200">
@@ -542,13 +581,13 @@ export default function SettingsPage() {
                         <span className="badge badge-neutral text-[10px]">{b.sizeFormatted}</span>
                       </td>
                       <td className="py-2 px-3 text-right">
-                        <a
-                          href={`/api/maintenance/backup?filename=${encodeURIComponent(b.filename)}`}
-                          download={b.filename}
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadSnapshot(b.filename)}
                           className="text-blue-600 hover:text-blue-800 font-medium inline-flex items-center gap-1 text-[11px]"
                         >
                           <ArrowDownToLine size={12} /> Unduh
-                        </a>
+                        </button>
                       </td>
                     </tr>
                   ))}
