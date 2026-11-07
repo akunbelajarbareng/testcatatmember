@@ -425,8 +425,90 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
     return { data: { nextId, seq: maxSeq + 1 } };
   }
 
+  // 4b-status. IDENTITY STATUS /api/identities/:id/status
+  if (pathname.startsWith('/api/identities/') && pathname.endsWith('/status') && method === 'POST') {
+    const rawId = pathname.replace('/api/identities/', '').replace('/status', '');
+    const targetId = decodeURIComponent(rawId);
+    const idRef = doc(db, COLLECTIONS.IDENTITIES, targetId);
+    const idSnap = await getDoc(idRef);
+    if (!idSnap.exists()) {
+      return { status: 404, data: { error: 'Identity tidak ditemukan' } };
+    }
+    const { action, alasan, cascadeOutlets } = body;
+    const nowIso = new Date().toISOString();
+
+    if (action === 'deactivate') {
+      const reason = alasan?.trim() || 'Dinonaktifkan secara manual oleh Owner';
+      await updateDoc(idRef, {
+        status: 'nonaktif',
+        nonaktif_tipe: 'manual',
+        nonaktif_alasan: reason,
+        nonaktif_tanggal: nowIso,
+        updated_at: nowIso,
+      });
+
+      let deactivatedOutletsCount = 0;
+      if (cascadeOutlets !== false) {
+        const outSnap = await getDocs(query(collection(db, COLLECTIONS.OUTLETS), where('identity_id', '==', targetId)));
+        const batch = writeBatch(db);
+        outSnap.forEach(d => {
+          batch.update(d.ref, {
+            aktif: 0,
+            nonaktif_tipe: 'manual',
+            nonaktif_alasan: `Mengikuti penonaktifan Akun Utama ${targetId}`,
+            nonaktif_tanggal: nowIso,
+            updated_at: nowIso,
+          });
+          deactivatedOutletsCount++;
+        });
+        await batch.commit();
+      }
+
+      return {
+        data: {
+          success: true,
+          message: `Akun utama ${targetId} berhasil dinonaktifkan.`,
+          result: { deactivatedOutletsCount },
+        },
+      };
+    } else {
+      await updateDoc(idRef, {
+        status: 'aktif',
+        nonaktif_tipe: null,
+        nonaktif_alasan: null,
+        nonaktif_tanggal: null,
+        updated_at: nowIso,
+      });
+
+      let reactivatedOutletsCount = 0;
+      if (cascadeOutlets === true) {
+        const outSnap = await getDocs(query(collection(db, COLLECTIONS.OUTLETS), where('identity_id', '==', targetId)));
+        const batch = writeBatch(db);
+        outSnap.forEach(d => {
+          batch.update(d.ref, {
+            aktif: 1,
+            nonaktif_tipe: null,
+            nonaktif_alasan: null,
+            nonaktif_tanggal: null,
+            updated_at: nowIso,
+          });
+          reactivatedOutletsCount++;
+        });
+        await batch.commit();
+      }
+
+      return {
+        data: {
+          success: true,
+          message: `Akun utama ${targetId} berhasil diaktifkan kembali.`,
+          result: { reactivatedOutletsCount },
+        },
+      };
+    }
+  }
+
   // 4b. SINGLE IDENTITY /api/identities/:id
-  if (pathname.startsWith('/api/identities/') && pathname !== '/api/identities/next-id' && pathname !== '/api/identities/export') {
+  if (pathname.startsWith('/api/identities/') && pathname !== '/api/identities/next-id' && pathname !== '/api/identities/export' && !pathname.endsWith('/status')) {
     const targetId = decodeURIComponent(pathname.replace('/api/identities/', ''));
 
     if (method === 'GET') {
@@ -466,14 +548,322 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
     }
   }
 
-  // 4c. PENALTIES /api/penalties/:id
+  // 4c. PENALTIES
+  if (pathname === '/api/penalties/apply' && method === 'POST') {
+    const {
+      identity_id,
+      jenis_sanksi,
+      dari,
+      sampai,
+      reset_saldo_lama,
+      alasan,
+      petugas,
+      password,
+    } = body;
+
+    if (!identity_id) {
+      return { status: 400, data: { error: 'Identity ID wajib diisi' } };
+    }
+    if (!jenis_sanksi || (jenis_sanksi !== 'temporary' && jenis_sanksi !== 'permanent')) {
+      return { status: 400, data: { error: 'Jenis sanksi harus temporary atau permanent' } };
+    }
+    if (!dari) {
+      return { status: 400, data: { error: 'Tanggal mulai sanksi wajib diisi' } };
+    }
+    if (jenis_sanksi === 'temporary' && !sampai) {
+      return { status: 400, data: { error: 'Tanggal selesai sanksi wajib diisi untuk sanksi periode tertentu' } };
+    }
+    if (!alasan || !alasan.trim()) {
+      return { status: 400, data: { error: 'Alasan sanksi pelanggaran wajib disertakan' } };
+    }
+    if (!petugas || !petugas.trim()) {
+      return { status: 400, data: { error: 'Nama petugas wajib diisi' } };
+    }
+    if ((password || '').trim() !== 'oriental2026') {
+      return { status: 401, data: { error: 'Password otorisasi Owner salah' } };
+    }
+
+    const idRef = doc(db, COLLECTIONS.IDENTITIES, identity_id);
+    const idSnap = await getDoc(idRef);
+    if (!idSnap.exists()) {
+      return { status: 404, data: { error: 'Member dengan ID tersebut tidak ditemukan' } };
+    }
+    const identityData = idSnap.data();
+
+    // 1. Ambil seluruh outlet milik member ini
+    const outSnap = await getDocs(query(collection(db, COLLECTIONS.OUTLETS), where('identity_id', '==', identity_id)));
+    const outletIds = new Set<string>();
+    outSnap.forEach(d => outletIds.add(d.id));
+
+    // 2. Ambil seluruh invoice milik outlet member ini dan nolkan sesuai rule sanksi
+    let invoicesAffected = 0;
+    let wipedPoints = 0;
+
+    if (outletIds.size > 0) {
+      const invSnap = await getDocs(collection(db, COLLECTIONS.INVOICES));
+      const invToUpdate: Array<{ ref: any; updates: any }> = [];
+
+      invSnap.forEach(d => {
+        const inv = d.data();
+        if (!inv.outlet_id || !outletIds.has(inv.outlet_id)) return;
+
+        const tgl = inv.tanggal || '';
+        let shouldZero = false;
+
+        // Opsi B: Reset Saldo Lama (hanguskan invoice sebelum tanggal sanksi)
+        if (reset_saldo_lama && tgl < dari) {
+          shouldZero = true;
+          wipedPoints += Number(inv.poin) || 0;
+        }
+
+        // Transaksi dalam periode sanksi
+        if (jenis_sanksi === 'permanent') {
+          if (tgl >= dari) shouldZero = true;
+        } else {
+          if (tgl >= dari && (!sampai || tgl <= sampai)) shouldZero = true;
+        }
+
+        if (shouldZero && ((Number(inv.poin) || 0) > 0 || (Number(inv.kupon) || 0) > 0 || !inv.is_excluded)) {
+          invToUpdate.push({
+            ref: d.ref,
+            updates: {
+              poin: 0,
+              kupon: 0,
+              is_excluded: 1,
+              updated_at: new Date().toISOString(),
+            },
+          });
+          invoicesAffected++;
+        }
+      });
+
+      // Commit batch
+      for (let i = 0; i < invToUpdate.length; i += 350) {
+        const batch = writeBatch(db);
+        const chunk = invToUpdate.slice(i, i + 350);
+        for (const item of chunk) {
+          batch.update(item.ref, item.updates);
+        }
+        await batch.commit();
+      }
+    }
+
+    // 3. Auto-void kupon fisik aktif
+    let voidedCouponsCount = 0;
+    try {
+      const coupSnap = await getDocs(query(
+        collection(db, COLLECTIONS.COUPONS),
+        where('identity_id', '==', identity_id),
+        where('status', '==', 'aktif')
+      ));
+      if (!coupSnap.empty) {
+        const cBatch = writeBatch(db);
+        coupSnap.forEach(d => {
+          cBatch.update(d.ref, {
+            status: 'void',
+            void_reason: `Gugur akibat sanksi: ${alasan.trim()}`,
+            updated_at: new Date().toISOString(),
+          });
+          voidedCouponsCount++;
+        });
+        await cBatch.commit();
+      }
+    } catch (e) {
+      console.warn('Coupons void check:', e);
+    }
+
+    // 4. Hitung ulang total saldo poin & kupon member dari sisa invoice aktif
+    let newTotalPoin = 0;
+    let newTotalKupon = 0;
+    if (outletIds.size > 0) {
+      const allInvSnap = await getDocs(collection(db, COLLECTIONS.INVOICES));
+      allInvSnap.forEach(d => {
+        const inv = d.data();
+        if (inv.outlet_id && outletIds.has(inv.outlet_id) && !inv.is_excluded) {
+          newTotalPoin += Number(inv.poin) || 0;
+          newTotalKupon += Number(inv.kupon) || 0;
+        }
+      });
+    }
+
+    const nowIso = new Date().toISOString();
+
+    // 5. Update master member di identities
+    await updateDoc(idRef, {
+      is_suspended: 1,
+      suspend_type: jenis_sanksi,
+      suspend_dari: dari,
+      suspend_sampai: jenis_sanksi === 'temporary' ? (sampai || null) : null,
+      suspend_reason: alasan.trim(),
+      suspend_reset_points: reset_saldo_lama ? 1 : 0,
+      suspended_at: nowIso,
+      suspended_by: petugas.trim(),
+      total_poin: newTotalPoin,
+      total_kupon: newTotalKupon,
+      updated_at: nowIso,
+    });
+
+    // 6. Catat riwayat sanksi ke collection member_penalties
+    const penaltyId = `pen_${Date.now()}`;
+    await setDoc(doc(db, COLLECTIONS.MEMBER_PENALTIES, penaltyId), {
+      id: penaltyId,
+      identity_id,
+      jenis_sanksi,
+      reset_saldo_lama: reset_saldo_lama ? 1 : 0,
+      dari,
+      sampai: jenis_sanksi === 'temporary' ? (sampai || null) : null,
+      alasan: alasan.trim(),
+      petugas: petugas.trim(),
+      voided_coupons_count: voidedCouponsCount,
+      wiped_points: wipedPoints,
+      status: 'aktif',
+      created_at: nowIso,
+      updated_at: nowIso,
+    });
+
+    // 7. Audit Log
+    const auditId = `audit_${Date.now()}`;
+    await setDoc(doc(db, COLLECTIONS.AUDIT_LOG, auditId), {
+      id: auditId,
+      aksi: 'apply_member_penalty',
+      tabel: 'member_penalties',
+      record_id: penaltyId,
+      keterangan: `Penjatuhan sanksi (${jenis_sanksi}) kepada member ${identityData.nama_pemilik || ''} (${identity_id}) oleh ${petugas.trim()}. Alasan: ${alasan.trim()}. Kupon di-void: ${voidedCouponsCount}, Poin dihanguskan: ${wipedPoints}`,
+      created_at: nowIso,
+    });
+
+    return {
+      data: {
+        success: true,
+        message: 'Sanksi pelanggaran member berhasil diberlakukan.',
+        data: {
+          success: true,
+          penalty_id: penaltyId,
+          invoices_affected: invoicesAffected,
+          voided_coupons_count: voidedCouponsCount,
+          wiped_points: wipedPoints,
+        },
+      },
+    };
+  }
+
+  if (pathname === '/api/penalties/revoke' && method === 'POST') {
+    const { identity_id, alasan, petugas, password } = body;
+
+    if (!identity_id) {
+      return { status: 400, data: { error: 'Identity ID wajib diisi' } };
+    }
+    if (!alasan || !alasan.trim()) {
+      return { status: 400, data: { error: 'Alasan pencabutan sanksi wajib disertakan' } };
+    }
+    if (!petugas || !petugas.trim()) {
+      return { status: 400, data: { error: 'Nama petugas wajib diisi' } };
+    }
+    if ((password || '').trim() !== 'oriental2026') {
+      return { status: 401, data: { error: 'Password persetujuan Owner salah' } };
+    }
+
+    const idRef = doc(db, COLLECTIONS.IDENTITIES, identity_id);
+    const idSnap = await getDoc(idRef);
+    if (!idSnap.exists()) {
+      return { status: 404, data: { error: 'Member tidak ditemukan' } };
+    }
+    const identityData = idSnap.data();
+
+    const nowIso = new Date().toISOString();
+
+    // 1. Update status member di identities (cabut suspend)
+    await updateDoc(idRef, {
+      is_suspended: 0,
+      suspend_type: null,
+      suspend_dari: null,
+      suspend_sampai: null,
+      suspend_reason: null,
+      suspend_reset_points: 0,
+      suspended_at: null,
+      suspended_by: null,
+      updated_at: nowIso,
+    });
+
+    // 2. Update status sanksi aktif di member_penalties menjadi 'dicabut'
+    const pSnap = await getDocs(query(
+      collection(db, COLLECTIONS.MEMBER_PENALTIES),
+      where('identity_id', '==', identity_id),
+      where('status', '==', 'aktif')
+    ));
+
+    let revokedCount = 0;
+    if (!pSnap.empty) {
+      const pBatch = writeBatch(db);
+      pSnap.forEach(d => {
+        pBatch.update(d.ref, {
+          status: 'dicabut',
+          revoked_at: nowIso,
+          revoked_by: petugas.trim(),
+          revoked_reason: alasan.trim(),
+          updated_at: nowIso,
+        });
+        revokedCount++;
+      });
+      await pBatch.commit();
+    }
+
+    // 3. Audit Log
+    const auditId = `audit_${Date.now()}`;
+    await setDoc(doc(db, COLLECTIONS.AUDIT_LOG, auditId), {
+      id: auditId,
+      aksi: 'revoke_member_penalty',
+      tabel: 'member_penalties',
+      record_id: identity_id,
+      keterangan: `Pencabutan sanksi member ${identityData.nama_pemilik || ''} (${identity_id}) oleh ${petugas.trim()}. Alasan: ${alasan.trim()}`,
+      created_at: nowIso,
+    });
+
+    return {
+      data: {
+        success: true,
+        message: 'Sanksi member berhasil dicabut. Status member telah dipulihkan.',
+        data: {
+          success: true,
+          revoked_count: revokedCount,
+        },
+      },
+    };
+  }
+
+  // GET /api/penalties/:identityId
   if (pathname.startsWith('/api/penalties/')) {
+    const targetId = decodeURIComponent(pathname.replace('/api/penalties/', ''));
+    const idSnap = await getDoc(doc(db, COLLECTIONS.IDENTITIES, targetId));
+    const idData = idSnap.exists() ? idSnap.data() : null;
+
+    const pSnap = await getDocs(query(
+      collection(db, COLLECTIONS.MEMBER_PENALTIES),
+      where('identity_id', '==', targetId)
+    ));
+
+    const history: any[] = [];
+    pSnap.forEach(d => {
+      history.push({ id: d.id, ...d.data() });
+    });
+
+    history.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+    const activePenalty = history.find(p => p.status === 'aktif') || null;
+
     return {
       data: {
         success: true,
         data: {
-          is_suspended: false,
-          history: [],
+          is_suspended: idData ? idData.is_suspended === 1 : false,
+          suspend_type: idData?.suspend_type || null,
+          suspend_dari: idData?.suspend_dari || null,
+          suspend_sampai: idData?.suspend_sampai || null,
+          suspend_reason: idData?.suspend_reason || null,
+          suspend_reset_points: idData?.suspend_reset_points === 1,
+          suspended_at: idData?.suspended_at || null,
+          suspended_by: idData?.suspended_by || null,
+          active_penalty: activePenalty,
+          history,
         },
       },
     };
@@ -1790,12 +2180,33 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
 
       let poin = 0;
       let kupon = 0;
+      let isExcluded = 0;
 
       if (matchedOutlet) {
-        const tipe = (matchedOutlet.tipe || 'retail').toLowerCase();
-        const rate = tipe === 'grosir' ? 200000 : tipe === 'ukm' ? 50000 : 100000;
-        poin = Math.floor(jumlah / rate);
-        kupon = Math.floor(jumlah / 150000);
+        const iden = matchedOutlet.identity_id ? identityMap.get(matchedOutlet.identity_id) : null;
+        let isSuspended = false;
+        if (iden && iden.is_suspended === 1) {
+          const { suspend_type, suspend_dari, suspend_sampai } = iden;
+          if (!suspend_dari) isSuspended = true;
+          else if (suspend_type === 'permanent') {
+            if (tanggal >= suspend_dari) isSuspended = true;
+          } else if (suspend_type === 'temporary' && suspend_sampai) {
+            if (tanggal >= suspend_dari && tanggal <= suspend_sampai) isSuspended = true;
+          } else if (tanggal >= suspend_dari) {
+            isSuspended = true;
+          }
+        }
+
+        if (isSuspended) {
+          poin = 0;
+          kupon = 0;
+          isExcluded = 1;
+        } else {
+          const tipe = (matchedOutlet.tipe || 'retail').toLowerCase();
+          const rate = tipe === 'grosir' ? 200000 : tipe === 'ukm' ? 50000 : 100000;
+          poin = Math.floor(jumlah / rate);
+          kupon = Math.floor(jumlah / 150000);
+        }
 
         // Agregasi outlet
         const outDelta = outletStatsDelta.get(targetOutletId!) || { trx: 0, poin: 0, kupon: 0 };
@@ -1827,7 +2238,7 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
         identity_id: matchedOutlet?.identity_id || null,
         poin,
         kupon,
-        is_excluded: 0,
+        is_excluded: isExcluded,
         bulan,
         created_at: new Date().toISOString(),
       });
