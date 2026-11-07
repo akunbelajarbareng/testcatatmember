@@ -2994,10 +2994,13 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
         peringatan.push(`Nama kosong untuk kode: ${kode}`);
         const apprRef = doc(collection(db, COLLECTIONS.APPROVALS));
         currentBatch.set(apprRef, {
+          id: apprRef.id,
           jenis: 'anomali_master',
           payload: { kode, nama: '', alamat, kota, kategori, alasan: 'Nama kosong' },
+          status: 'menunggu',
           batch_id: batchId,
           created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
         });
         opCount++;
         approvalCount++;
@@ -3010,10 +3013,13 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
         peringatan.push(`Kode tidak lazim: ${kode} (${nama})`);
         const apprRef = doc(collection(db, COLLECTIONS.APPROVALS));
         currentBatch.set(apprRef, {
+          id: apprRef.id,
           jenis: 'anomali_master',
           payload: { kode, nama, alamat, kota, kategori, alasan: 'Kode tidak lazim' },
+          status: 'menunggu',
           batch_id: batchId,
           created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
         });
         opCount++;
         approvalCount++;
@@ -3028,10 +3034,13 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
           peringatan.push(`Format kode 102 tidak valid: ${kode} (${nama}) — ${info.reason}`);
           const apprRef = doc(collection(db, COLLECTIONS.APPROVALS));
           currentBatch.set(apprRef, {
+            id: apprRef.id,
             jenis: 'anomali_master',
             payload: { kode, nama, alamat, kota, kategori, alasan: info.reason },
+            status: 'menunggu',
             batch_id: batchId,
             created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
           });
           opCount++;
           approvalCount++;
@@ -3044,10 +3053,13 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
           peringatan.push(`Kode 102 tabrakan: ${kode} dipakai oleh ${kode102Map.get(info.clean)?.join(', ')}`);
           const apprRef = doc(collection(db, COLLECTIONS.APPROVALS));
           currentBatch.set(apprRef, {
+            id: apprRef.id,
             jenis: 'kode_tabrakan',
             payload: { kode: info.clean, namas: kode102Map.get(info.clean), alasan: 'Satu kode 102 digunakan beberapa nama berbeda' },
+            status: 'menunggu',
             batch_id: batchId,
             created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
           });
           opCount++;
           approvalCount++;
@@ -3159,6 +3171,7 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
         barisOk++;
         const apprRef = doc(collection(db, COLLECTIONS.APPROVALS));
         currentBatch.set(apprRef, {
+          id: apprRef.id,
           jenis: 'kode_lama_131',
           payload: {
             kode,
@@ -3168,8 +3181,10 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
             kategori,
             alasan: 'Customer terdaftar dengan kode POS lama (131). Dapat dipetakan ke Akun Utama CRM.',
           },
+          status: 'menunggu',
           batch_id: batchId,
           created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
         });
         opCount++;
         approvalCount++;
@@ -3272,6 +3287,25 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
     const identityMap = new Map<string, any>();
     idSnap.forEach(d => identityMap.set(d.id, d.data()));
 
+    // Preload approvals & master names untuk deteksi unmapped
+    const apprSnap = await getDocs(query(collection(db, COLLECTIONS.APPROVALS), where('jenis', '==', 'nama_belum_dipetakan')));
+    const existingUnmappedApprs = new Set<string>();
+    apprSnap.forEach(d => {
+      const a = d.data();
+      const p = typeof a.payload === 'string' ? JSON.parse(a.payload) : a.payload;
+      if (p?.nama_pos) existingUnmappedApprs.add(String(p.nama_pos).toUpperCase().trim());
+    });
+
+    const masterNamas = new Set<string>();
+    idSnap.forEach(d => {
+      const data = d.data();
+      if (data.nama_pemilik) masterNamas.add(String(data.nama_pemilik).toUpperCase().trim());
+    });
+    outSnap.forEach(d => {
+      const data = d.data();
+      if (data.nama_outlet) masterNamas.add(String(data.nama_outlet).toUpperCase().trim());
+    });
+
     let currentBatch = writeBatch(db);
     let opCount = 0;
 
@@ -3362,6 +3396,33 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
           idDelta.poin += poin;
           idDelta.kupon += kupon;
           identityStatsDelta.set(matchedOutlet.identity_id, idDelta);
+        }
+      } else {
+        // Nama transaksi belum terpetakan — buat antrean approval jika belum ada
+        barisWarn++;
+        const custUpper = namaCustomer.toUpperCase().trim();
+        if (!existingUnmappedApprs.has(custUpper)) {
+          existingUnmappedApprs.add(custUpper);
+          peringatan.push(`Nama belum terpetakan: "${namaCustomer}"`);
+          const apprRef = doc(collection(db, COLLECTIONS.APPROVALS));
+          currentBatch.set(apprRef, {
+            id: apprRef.id,
+            jenis: 'nama_belum_dipetakan',
+            payload: {
+              nama_pos: namaCustomer,
+              ada_di_master: masterNamas.has(custUpper),
+              alasan: masterNamas.has(custUpper)
+                ? 'Nama ada di master, perlu dipetakan ke outlet/lini bisnis spesifik.'
+                : 'Nama baru tidak ditemukan di master, perlu dipetakan ke outlet tujuan.',
+            },
+            status: 'menunggu',
+            batch_id: batchId,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          });
+          opCount++;
+          approvalCount++;
+          await commitBatchIfNeeded();
         }
       }
 
