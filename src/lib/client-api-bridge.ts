@@ -650,7 +650,7 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
       let all: any[] = [];
       snap.forEach(d => {
         const item = d.data();
-        if (item.id && !item.id.startsWith('999-')) {
+        if (item.id && !item.id.startsWith('999-') && item.status !== 'merged') {
           all.push(item);
         }
       });
@@ -890,6 +890,353 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
     };
   }
 
+  // 3c. MERGE IDENTITIES /api/identities/merge
+  if (pathname === '/api/identities/merge') {
+    if (method === 'GET') {
+      const sourceId = searchParams.get('source_id') || '';
+      const targetId = searchParams.get('target_id') || '';
+
+      if (!sourceId || !targetId) {
+        return { status: 400, data: { error: 'source_id dan target_id wajib disertakan' } };
+      }
+      if (sourceId === targetId) {
+        return { status: 400, data: { error: 'Akun sumber dan akun tujuan tidak boleh sama' } };
+      }
+
+      const [sourceSnap, targetSnap, sourceOutletsSnap, targetOutletsSnap, invSnap, penSnap, coupSnap] = await Promise.all([
+        getDoc(doc(db, COLLECTIONS.IDENTITIES, sourceId)),
+        getDoc(doc(db, COLLECTIONS.IDENTITIES, targetId)),
+        getDocs(query(collection(db, COLLECTIONS.OUTLETS), where('identity_id', '==', sourceId))),
+        getDocs(query(collection(db, COLLECTIONS.OUTLETS), where('identity_id', '==', targetId))),
+        getDocs(collection(db, COLLECTIONS.INVOICES)),
+        getDocs(collection(db, COLLECTIONS.MEMBER_PENALTIES)),
+        getDocs(collection(db, COLLECTIONS.COUPONS)),
+      ]);
+
+      if (!sourceSnap.exists()) {
+        return { status: 404, data: { error: `Akun sumber "${sourceId}" tidak ditemukan` } };
+      }
+      if (!targetSnap.exists()) {
+        return { status: 404, data: { error: `Akun tujuan "${targetId}" tidak ditemukan` } };
+      }
+
+      const sourceData = sourceSnap.data();
+      const targetData = targetSnap.data();
+
+      const sourceOutlets: any[] = [];
+      const sourceOutletIds = new Set<string>();
+      sourceOutletsSnap.forEach(d => {
+        sourceOutlets.push(d.data());
+        sourceOutletIds.add(d.id);
+      });
+
+      const targetOutlets: any[] = [];
+      const targetOutletIds = new Set<string>();
+      targetOutletsSnap.forEach(d => {
+        targetOutlets.push(d.data());
+        targetOutletIds.add(d.id);
+      });
+
+      const allInvoices: any[] = [];
+      invSnap.forEach(d => allInvoices.push(d.data()));
+
+      const sourceInvoices = allInvoices.filter(i =>
+        i.identity_id === sourceId || (i.outlet_id && sourceOutletIds.has(i.outlet_id))
+      );
+      const targetInvoices = allInvoices.filter(i =>
+        i.identity_id === targetId || (i.outlet_id && targetOutletIds.has(i.outlet_id))
+      );
+
+      const sourceMonths = Array.from(new Set(sourceInvoices.map(i => (i.tanggal || '').slice(0, 7)).filter(Boolean))).sort();
+      const targetMonths = Array.from(new Set(targetInvoices.map(i => (i.tanggal || '').slice(0, 7)).filter(Boolean))).sort();
+
+      // Check collision nomor invoice
+      const targetInvoiceNos = new Set(targetInvoices.map(i => i.no_invoice).filter(Boolean));
+      const collisions = sourceInvoices.map(i => i.no_invoice).filter(no => no && targetInvoiceNos.has(no));
+
+      // Check kesesuaian bulan (jika keduanya punya transaksi)
+      let monthsMatch = true;
+      if (sourceMonths.length > 0 && targetMonths.length > 0) {
+        monthsMatch = sourceMonths.some(m => targetMonths.includes(m));
+      }
+
+      const reasons: string[] = [];
+      if (collisions.length > 0) {
+        reasons.push(`Ditemukan ${collisions.length} nomor invoice duplikat (${collisions.slice(0, 5).join(', ')}${collisions.length > 5 ? '...' : ''}). Nomor invoice wajib beda.`);
+      }
+      if (!monthsMatch) {
+        reasons.push(`Bulan transaksi tidak cocok. Sumber: [${sourceMonths.join(', ')}], Tujuan: [${targetMonths.join(', ')}]. Transaksi harus berada di bulan yang sama.`);
+      }
+
+      let sourceCouponsCount = 0;
+      let targetCouponsCount = 0;
+      coupSnap.forEach(d => {
+        const c = d.data();
+        if (c.identity_id === sourceId) sourceCouponsCount++;
+        if (c.identity_id === targetId) targetCouponsCount++;
+      });
+
+      let sourcePenaltiesCount = 0;
+      let targetPenaltiesCount = 0;
+      penSnap.forEach(d => {
+        const p = d.data();
+        if (p.identity_id === sourceId) sourcePenaltiesCount++;
+        if (p.identity_id === targetId) targetPenaltiesCount++;
+      });
+
+      return {
+        data: {
+          canMerge: reasons.length === 0,
+          reasons,
+          source: {
+            id: sourceId,
+            nama_pemilik: sourceData.nama_pemilik || '',
+            outletsCount: sourceOutlets.length,
+            invoicesCount: sourceInvoices.length,
+            couponsCount: sourceCouponsCount,
+            batchesCount: 0,
+            penaltiesCount: sourcePenaltiesCount,
+            months: sourceMonths,
+          },
+          target: {
+            id: targetId,
+            nama_pemilik: targetData.nama_pemilik || '',
+            outletsCount: targetOutlets.length,
+            invoicesCount: targetInvoices.length,
+            couponsCount: targetCouponsCount,
+            batchesCount: 0,
+            penaltiesCount: targetPenaltiesCount,
+            months: targetMonths,
+          },
+          collisions,
+          monthsMatch,
+        },
+      };
+    } else if (method === 'POST') {
+      const { source_id, target_id, owner_password } = body;
+
+      if (!source_id || !target_id) {
+        return { status: 400, data: { error: 'source_id dan target_id wajib diisi' } };
+      }
+      if ((owner_password || '').trim() !== 'oriental2026') {
+        return { status: 401, data: { error: 'Password Owner salah. Approval merge ditolak.' } };
+      }
+      if (source_id === target_id) {
+        return { status: 400, data: { error: 'Akun sumber dan akun tujuan tidak boleh sama' } };
+      }
+
+      const [sourceSnap, targetSnap, sourceOutletsSnap, targetOutletsSnap, invSnap, aliasSnap, penSnap, coupSnap] = await Promise.all([
+        getDoc(doc(db, COLLECTIONS.IDENTITIES, source_id)),
+        getDoc(doc(db, COLLECTIONS.IDENTITIES, target_id)),
+        getDocs(query(collection(db, COLLECTIONS.OUTLETS), where('identity_id', '==', source_id))),
+        getDocs(query(collection(db, COLLECTIONS.OUTLETS), where('identity_id', '==', target_id))),
+        getDocs(collection(db, COLLECTIONS.INVOICES)),
+        getDocs(collection(db, COLLECTIONS.POS_ALIASES)),
+        getDocs(collection(db, COLLECTIONS.MEMBER_PENALTIES)),
+        getDocs(collection(db, COLLECTIONS.COUPONS)),
+      ]);
+
+      if (!sourceSnap.exists()) {
+        return { status: 404, data: { error: `Akun sumber "${source_id}" tidak ditemukan` } };
+      }
+      if (!targetSnap.exists()) {
+        return { status: 404, data: { error: `Akun tujuan "${target_id}" tidak ditemukan` } };
+      }
+
+      const sourceData = sourceSnap.data();
+      const targetData = targetSnap.data();
+
+      const sourceOutlets: any[] = [];
+      sourceOutletsSnap.forEach(d => sourceOutlets.push({ docId: d.id, ...d.data() }));
+
+      const targetOutlets: any[] = [];
+      targetOutletsSnap.forEach(d => targetOutlets.push({ docId: d.id, ...d.data() }));
+
+      let transferredOutlets = 0;
+      let transferredAliases = 0;
+      let transferredInvoices = 0;
+      let transferredCoupons = 0;
+      let transferredPenalties = 0;
+
+      const nowIso = new Date().toISOString();
+
+      // 1. Pindahkan atau gabungkan outlet
+      for (const sOut of sourceOutlets) {
+        const matchedTargetOutlet = targetOutlets.find(t => (t.tipe || '').toLowerCase() === (sOut.tipe || '').toLowerCase());
+
+        if (matchedTargetOutlet) {
+          // A. Target sudah punya outlet dengan tipe yang sama:
+          // Pindahkan alias kasir ke outlet target
+          const outAliases: any[] = [];
+          aliasSnap.forEach(d => {
+            const a = d.data();
+            if (a.outlet_id === sOut.id) outAliases.push(d.ref);
+          });
+          if (outAliases.length > 0) {
+            const b = writeBatch(db);
+            outAliases.forEach(ref => {
+              b.update(ref, { outlet_id: matchedTargetOutlet.id, updated_at: nowIso });
+              transferredAliases++;
+            });
+            await b.commit();
+          }
+
+          // Pindahkan invoice dari sOut ke matchedTargetOutlet
+          const outInvs: any[] = [];
+          invSnap.forEach(d => {
+            const inv = d.data();
+            if (inv.outlet_id === sOut.id || inv.identity_id === source_id) {
+              outInvs.push({ ref: d.ref, outlet_id: matchedTargetOutlet.id, tipe: matchedTargetOutlet.tipe, jumlah: inv.jumlah });
+            }
+          });
+          for (let i = 0; i < outInvs.length; i += 350) {
+            const b = writeBatch(db);
+            const chunk = outInvs.slice(i, i + 350);
+            for (const item of chunk) {
+              const rate = item.tipe === 'grosir' ? 200000 : item.tipe === 'ukm' ? 50000 : 100000;
+              const jml = Number(item.jumlah) || 0;
+              b.update(item.ref, {
+                outlet_id: item.outlet_id,
+                identity_id: target_id,
+                poin: Math.floor(jml / rate),
+                kupon: Math.floor(jml / 150000),
+                updated_at: nowIso,
+              });
+              transferredInvoices++;
+            }
+            await b.commit();
+          }
+
+          // Hapus outlet source yang sudah dilebur
+          await deleteDoc(doc(db, COLLECTIONS.OUTLETS, sOut.id));
+        } else {
+          // B. Target belum punya outlet dengan tipe ini:
+          // Pindahkan outlet sOut ke target
+          await updateDoc(doc(db, COLLECTIONS.OUTLETS, sOut.id), {
+            identity_id: target_id,
+            updated_at: nowIso,
+          });
+          transferredOutlets++;
+
+          // Update invoice milik outlet ini agar identity_id-nya mengarah ke target
+          const outInvs: any[] = [];
+          invSnap.forEach(d => {
+            const inv = d.data();
+            if (inv.outlet_id === sOut.id) {
+              outInvs.push(d.ref);
+            }
+          });
+          for (let i = 0; i < outInvs.length; i += 350) {
+            const b = writeBatch(db);
+            const chunk = outInvs.slice(i, i + 350);
+            for (const ref of chunk) {
+              b.update(ref, {
+                identity_id: target_id,
+                updated_at: nowIso,
+              });
+              transferredInvoices++;
+            }
+            await b.commit();
+          }
+        }
+      }
+
+      // 2. Pindahkan kupon
+      const outCoups: any[] = [];
+      coupSnap.forEach(d => {
+        const c = d.data();
+        if (c.identity_id === source_id) outCoups.push(d.ref);
+      });
+      if (outCoups.length > 0) {
+        const b = writeBatch(db);
+        outCoups.forEach(ref => {
+          b.update(ref, { identity_id: target_id, updated_at: nowIso });
+          transferredCoupons++;
+        });
+        await b.commit();
+      }
+
+      // 3. Pindahkan sanksi
+      const outPens: any[] = [];
+      penSnap.forEach(d => {
+        const p = d.data();
+        if (p.identity_id === source_id) outPens.push(d.ref);
+      });
+      if (outPens.length > 0) {
+        const b = writeBatch(db);
+        outPens.forEach(ref => {
+          b.update(ref, { identity_id: target_id, updated_at: nowIso });
+          transferredPenalties++;
+        });
+        await b.commit();
+      }
+
+      // 4. Hapus statements milik source agar tidak redundan
+      const sourceStmtsSnap = await getDocs(query(collection(db, COLLECTIONS.STATEMENTS), where('identity_id', '==', source_id)));
+      if (!sourceStmtsSnap.empty) {
+        const b = writeBatch(db);
+        sourceStmtsSnap.forEach(d => b.delete(d.ref));
+        await b.commit();
+      }
+
+      // 5. Tandai akun source sebagai 'merged'
+      await updateDoc(doc(db, COLLECTIONS.IDENTITIES, source_id), {
+        status: 'merged',
+        merged_into: target_id,
+        updated_at: nowIso,
+      });
+
+      // 6. Hitung ulang total transaksi, poin, dan kupon untuk akun target
+      const updatedTargetInvsSnap = await getDocs(query(collection(db, COLLECTIONS.INVOICES), where('identity_id', '==', target_id)));
+      let newTotalPoin = 0;
+      let newTotalKupon = 0;
+      updatedTargetInvsSnap.forEach(d => {
+        const inv = d.data();
+        if (!inv.is_excluded) {
+          newTotalPoin += Number(inv.poin) || 0;
+          newTotalKupon += Number(inv.kupon) || 0;
+        }
+      });
+
+      const updatedTargetOutletsSnap = await getDocs(query(collection(db, COLLECTIONS.OUTLETS), where('identity_id', '==', target_id)));
+      const newOutletCount = updatedTargetOutletsSnap.size;
+
+      await updateDoc(doc(db, COLLECTIONS.IDENTITIES, target_id), {
+        total_poin: newTotalPoin,
+        total_kupon: newTotalKupon,
+        jumlah_outlet: newOutletCount,
+        updated_at: nowIso,
+      });
+
+      // 7. Audit Log
+      const auditId = `audit_${Date.now()}`;
+      await setDoc(doc(db, COLLECTIONS.AUDIT_LOG, auditId), {
+        id: auditId,
+        aksi: 'merge_identity',
+        tabel: 'identities',
+        record_id: source_id,
+        keterangan: `Merge akun ${source_id} (${sourceData.nama_pemilik || ''}) ke ${target_id} (${targetData.nama_pemilik || ''}). Dipindahkan: ${transferredInvoices} invoice, ${transferredAliases} alias, ${transferredOutlets} outlet, ${transferredCoupons} kupon, ${transferredPenalties} sanksi penalti. Disetujui Owner.`,
+        created_at: nowIso,
+      });
+
+      return {
+        data: {
+          success: true,
+          message: `Akun ${source_id} berhasil dilebur ke dalam ${target_id}. Berhasil mengalihkan ${transferredInvoices} invoice, ${transferredCoupons} kupon fisik, ${transferredOutlets} unit usaha, dan ${transferredAliases} alias kasir.`,
+          result: {
+            transferredOutlets,
+            transferredAliases,
+            transferredInvoices,
+            transferredCoupons,
+            transferredBatches: 0,
+            transferredPenalties,
+            targetId: target_id,
+          },
+        },
+      };
+    }
+  }
+
   // 4. IDENTITIES NEXT ID /api/identities/next-id
   if (pathname === '/api/identities/next-id') {
     const now = new Date();
@@ -1001,7 +1348,7 @@ async function handleApiRequest(urlStr: string, init?: RequestInit): Promise<{ s
   }
 
   // 4b. SINGLE IDENTITY /api/identities/:id
-  if (pathname.startsWith('/api/identities/') && pathname !== '/api/identities/next-id' && pathname !== '/api/identities/export' && !pathname.endsWith('/status')) {
+  if (pathname.startsWith('/api/identities/') && pathname !== '/api/identities/next-id' && pathname !== '/api/identities/export' && pathname !== '/api/identities/merge' && !pathname.endsWith('/status')) {
     const targetId = decodeURIComponent(pathname.replace('/api/identities/', ''));
 
     if (method === 'GET') {
